@@ -1,0 +1,16 @@
+picked {'sn': 0, 'sn2': 4, 'psr': 1, 'agn': 50, 'mrg': -1, 'tde': 37}
+02_supernova_flash
+03_supernova_shell
+04_supernova_shell_late
+05_supernova2_shell
+06_quasar_jets
+07_blackhole_closeup
+08_pulsar
+10_tde
+reel sn 300
+reel sn2 600
+reel agn 900
+reel psr 1200
+reel tde 1500
+console errors/warnings: 0 []
+FIN

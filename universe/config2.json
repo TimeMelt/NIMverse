@@ -1,0 +1,8 @@
+{
+ "seed": 42, "rng": "nim",
+ "n_galaxies": 5, "stars_per_galaxy": 1000, "galaxy_spread": 120.0, "star_soft": 0.35,
+ "galaxy_steps": 1440, "galaxy_dt": 0.02, "asteroids": 200, "system_steps": 12000, "system_dt": 0.004,
+ "frames": 240, "width": 1600, "height": 900,
+ "eval": {"n_galaxies": 3, "stars_per_galaxy": 120, "galaxy_steps": 600, "galaxy_dt": 0.02, "asteroids": 40, "system_steps": 3000, "system_dt": 0.005},
+ "out_dir": "/workspace/nim_universe/out"
+}

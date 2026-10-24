@@ -1,0 +1,4 @@
+#evlog{position:absolute;right:10px;bottom:58px;width:300px;max-height:38%;overflow:auto;background:rgba(10,14,24,.78);border:1px solid #234;border-radius:8px;padding:6px;font-size:12px}
+#evlog .e{padding:3px 5px;border-radius:4px;cursor:pointer;display:flex;gap:6px} #evlog .e:hover{background:#1b2e4a} #evlog .e.now{background:#2a1d10}
+#evlog .t{color:#789;width:58px;flex:none} #evhdr{color:#fc8;font-weight:600;margin-bottom:4px}
+#evstrip{position:absolute;left:8px;right:8px;bottom:50px;height:8px;cursor:pointer}

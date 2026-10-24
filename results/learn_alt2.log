@@ -1,0 +1,39 @@
+logs directory already exists, cleaning now...
+server running...
+NIM ServerClass mesh on 127.0.0.1:45721 (5 queues)
+warm-start fit: max|dP| struct 0.0001 events 0.0000  [52s]
+one-way (v3+v4, new keys mid) val 0.7901   [old v4 model: 0.7480]
+round 0 structure epoch 0 lr 0.080 (train,val) [(0.816, 0.784), (0.819, 0.789), (0.803, 0.785)] phase-best 0.7901 [345s]
+round 0 structure epoch 1 lr 0.064 (train,val) [(0.809, 0.794), (0.815, 0.79), (0.811, 0.788)] phase-best 0.7935 [581s]
+round 0 structure epoch 2 lr 0.053 (train,val) [(0.814, 0.802), (0.802, 0.801), (0.807, 0.785)] phase-best 0.8019 [817s]
+round 0 events    epoch 0 lr 0.100 (train,val) [(0.813, 0.794), (0.791, 0.784)] phase-best 0.8019 [988s]
+round 0 events    epoch 1 lr 0.080 (train,val) [(0.813, 0.793), (0.798, 0.79)] phase-best 0.8019 [1147s]
+round 0 events    epoch 2 lr 0.067 (train,val) [(0.811, 0.786), (0.811, 0.79)] phase-best 0.8019 [1308s]
+== round 0: val 0.8019 gain +0.0118 max|dP| struct 0.049 events 0.000
+round 1 structure epoch 0 lr 0.046 (train,val) [(0.811, 0.797), (0.815, 0.801), (0.818, 0.795)] phase-best 0.8019 [1571s]
+round 1 structure epoch 1 lr 0.040 (train,val) [(0.814, 0.798), (0.819, 0.796), (0.821, 0.796)] phase-best 0.8019 [1818s]
+round 1 structure epoch 2 lr 0.036 (train,val) [(0.819, 0.797), (0.815, 0.803), (0.816, 0.789)] phase-best 0.8028 [2048s]
+round 1 events    epoch 0 lr 0.057 (train,val) [(0.81, 0.803), (0.806, 0.798)] phase-best 0.8035 [2176s]
+round 1 events    epoch 1 lr 0.050 (train,val) [(0.808, 0.798), (0.808, 0.8)] phase-best 0.8035 [2286s]
+round 1 events    epoch 2 lr 0.044 (train,val) [(0.818, 0.803), (0.822, 0.813)] phase-best 0.8128 [2377s]
+== round 1: val 0.8128 gain +0.0110 max|dP| struct 0.049 events 0.119
+round 2 structure epoch 0 lr 0.032 (train,val) [(0.824, 0.816), (0.819, 0.817), (0.828, 0.815)] phase-best 0.8174 [2575s]
+round 2 structure epoch 1 lr 0.029 (train,val) [(0.823, 0.814), (0.827, 0.813), (0.827, 0.813)] phase-best 0.8174 [2819s]
+round 2 structure epoch 2 lr 0.027 (train,val) [(0.83, 0.812), (0.816, 0.811), (0.831, 0.816)] phase-best 0.8174 [2962s]
+round 2 events    epoch 0 lr 0.040 (train,val) [(0.817, 0.826), (0.818, 0.805)] phase-best 0.8260 [3063s]
+round 2 events    epoch 1 lr 0.036 (train,val) [(0.83, 0.844), (0.809, 0.813)] phase-best 0.8437 [3152s]
+round 2 events    epoch 2 lr 0.033 (train,val) [(0.828, 0.833), (0.815, 0.814)] phase-best 0.8437 [3241s]
+== round 2: val 0.8437 gain +0.0308 max|dP| struct 0.027 events 0.087
+round 3 structure epoch 0 lr 0.025 (train,val) [(0.831, 0.831), (0.829, 0.838), (0.834, 0.839)] phase-best 0.8437 [3389s]
+round 3 structure epoch 1 lr 0.023 (train,val) [(0.829, 0.837), (0.834, 0.843), (0.833, 0.841)] phase-best 0.8437 [3526s]
+round 3 structure epoch 2 lr 0.021 (train,val) [(0.832, 0.832), (0.833, 0.842), (0.831, 0.837)] phase-best 0.8437 [3666s]
+round 3 events    epoch 0 lr 0.031 (train,val) [(0.822, 0.834), (0.825, 0.838)] phase-best 0.8437 [3769s]
+round 3 events    epoch 1 lr 0.029 (train,val) [(0.825, 0.832), (0.836, 0.85)] phase-best 0.8501 [3859s]
+round 3 events    epoch 2 lr 0.027 (train,val) [(0.827, 0.838), (0.84, 0.846)] phase-best 0.8501 [3950s]
+== round 3: val 0.8501 gain +0.0065 max|dP| struct 0.000 events 0.053
+HELD-OUT [9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9011, 9012, 9013, 9014, 9015, 9016, 9017, 9018, 9019, 9020, 9021, 9022, 9023]
+arm                                         total     base   events  sn_rate      agn  visible   merger    n_tde     n_sn
+one-way v3+v4 (old event model)             0.748    0.825    0.697    1.000    0.000    0.755    0.875  119.583    6.958
+one-way v3+v4 (+fixes at mid-range)         0.793    0.826    0.772    1.000    0.796    0.960    0.875   15.708    6.958
+trained (best-on-val)                       0.812    0.819    0.807    1.000    0.837    0.976    0.875   11.750    7.042
+done 4045s

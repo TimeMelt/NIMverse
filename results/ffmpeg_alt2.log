@@ -1,0 +1,48 @@
+ffmpeg version 7.1.5-0+deb13u1 Copyright (c) 2000-2026 the FFmpeg developers
+  built with gcc 14 (Debian 14.2.0-19)
+  configuration: --prefix=/usr --extra-version=0+deb13u1 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --disable-libmfx --disable-omx --enable-gnutls --enable-libaom --enable-libass --enable-libbs2b --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libglslang --enable-libgme --enable-libgsm --enable-libharfbuzz --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-openal --enable-opencl --enable-opengl --disable-sndio --enable-libvpl --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-ladspa --enable-libbluray --enable-libcaca --enable-libdvdnav --enable-libdvdread --enable-libjack --enable-libpulse --enable-librabbitmq --enable-librist --enable-libsrt --enable-libssh --enable-libsvtav1 --enable-libx264 --enable-libzmq --enable-libzvbi --enable-lv2 --enable-sdl2 --enable-libplacebo --enable-librav1e --enable-pocketsphinx --enable-librsvg --enable-libjxl --enable-shared
+  libavutil      59. 39.100 / 59. 39.100
+  libavcodec     61. 19.101 / 61. 19.101
+  libavformat    61.  7.103 / 61.  7.103
+  libavdevice    61.  3.100 / 61.  3.100
+  libavfilter    10.  5.100 / 10.  5.100
+  libswscale      8.  3.100 /  8.  3.100
+  libswresample   5.  3.100 /  5.  3.100
+  libpostproc    58.  3.100 / 58.  3.100
+Input #0, image2, from '/workspace/nim_universe/out/events_shots_alt2/reel/f%04d.png':
+  Duration: 00:00:50.00, start: 0.000000, bitrate: N/A
+  Stream #0:0: Video: png, rgb24(pc, gbr/unknown/unknown), 1280x720, 30 fps, 30 tbr, 30 tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (png (native) -> h264 (libx264))
+Press [q] to stop, [?] for help
+[libx264 @ 0x561353c07300] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2 AVX512
+[libx264 @ 0x561353c07300] profile High, level 3.1, 4:2:0, 8-bit
+[libx264 @ 0x561353c07300] 264 - core 164 r3108 31e19f9 - H.264/MPEG-4 AVC codec - Copyleft 2003-2023 - http://www.videolan.org/x264.html - options: cabac=1 ref=3 deblock=1:0:0 analyse=0x3:0x113 me=hex subme=7 psy=1 psy_rd=1.00:0.00 mixed_ref=1 me_range=16 chroma_me=1 trellis=1 8x8dct=1 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_offset=-2 threads=12 lookahead_threads=2 sliced_threads=0 nr=0 decimate=1 interlaced=0 bluray_compat=0 constrained_intra=0 bframes=3 b_pyramid=2 b_adapt=1 b_bias=0 direct=1 weightb=1 open_gop=0 weightp=2 keyint=250 keyint_min=25 scenecut=40 intra_refresh=0 rc_lookahead=40 rc=crf mbtree=1 crf=23.0 qcomp=0.60 qpmin=0 qpmax=69 qpstep=4 ip_ratio=1.40 aq=1:1.00
+Output #0, mp4, to '/workspace/nim_universe/out/events_highlight_reel_seed7_alt2.mp4':
+  Metadata:
+    encoder         : Lavf61.7.103
+  Stream #0:0: Video: h264 (avc1 / 0x31637661), yuv420p(tv, progressive), 1280x720, q=2-31, 30 fps, 15360 tbn
+      Metadata:
+        encoder         : Lavc61.19.101 libx264
+      Side data:
+        cpb: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+frame=    7 fps=0.0 q=29.0 size=       0KiB time=00:00:00.16 bitrate=   2.3kbits/s speed=0.329x    frame=   42 fps= 42 q=29.0 size=     256KiB time=00:00:01.33 bitrate=1573.2kbits/s speed=1.32x    frame=   82 fps= 54 q=29.0 size=     768KiB time=00:00:02.66 bitrate=2359.4kbits/s speed=1.77x    frame=  125 fps= 62 q=29.0 size=    1536KiB time=00:00:04.10 bitrate=3069.1kbits/s speed=2.04x    frame=  166 fps= 66 q=29.0 size=    2304KiB time=00:00:05.46 bitrate=3452.7kbits/s speed=2.18x    frame=  207 fps= 69 q=29.0 size=    2816KiB time=00:00:06.83 bitrate=3376.0kbits/s speed=2.26x    frame=  253 fps= 72 q=29.0 size=    3584KiB time=00:00:08.36 bitrate=3509.2kbits/s speed=2.38x    frame=  294 fps= 73 q=29.0 size=    4352KiB time=00:00:09.73 bitrate=3662.9kbits/s speed=2.42x    frame=  338 fps= 75 q=29.0 size=    4864KiB time=00:00:11.20 bitrate=3557.7kbits/s speed=2.48x    frame=  374 fps= 74 q=29.0 size=    5376KiB time=00:00:12.40 bitrate=3551.7kbits/s speed=2.47x    frame=  402 fps= 73 q=29.0 size=    5888KiB time=00:00:13.33 bitrate=3617.6kbits/s speed=2.41x    frame=  431 fps= 72 q=29.0 size=    6656KiB time=00:00:14.30 bitrate=3813.0kbits/s speed=2.37x    frame=  458 fps= 70 q=29.0 size=    7168KiB time=00:00:15.20 bitrate=3863.2kbits/s speed=2.33x    frame=  489 fps= 70 q=29.0 size=    7936KiB time=00:00:16.23 bitrate=4004.9kbits/s speed=2.31x    frame=  519 fps= 69 q=29.0 size=    8704KiB time=00:00:17.23 bitrate=4137.5kbits/s speed=2.29x    frame=  543 fps= 68 q=29.0 size=    9472KiB time=00:00:18.03 bitrate=4302.9kbits/s speed=2.25x    frame=  569 fps= 67 q=29.0 size=   10240KiB time=00:00:18.90 bitrate=4438.4kbits/s speed=2.22x    frame=  598 fps= 66 q=29.0 size=   10752KiB time=00:00:19.86 bitrate=4433.6kbits/s speed= 2.2x    frame=  632 fps= 66 q=29.0 size=   11520KiB time=00:00:21.00 bitrate=4493.9kbits/s speed= 2.2x    frame=  669 fps= 67 q=29.0 size=   12032KiB time=00:00:22.23 bitrate=4433.3kbits/s speed=2.22x    frame=  709 fps= 67 q=29.0 size=   12544KiB time=00:00:23.56 bitrate=4360.4kbits/s speed=2.24x    frame=  753 fps= 68 q=29.0 size=   13056KiB time=00:00:25.03 bitrate=4272.5kbits/s speed=2.27x    frame=  795 fps= 69 q=29.0 size=   13568KiB time=00:00:26.43 bitrate=4204.9kbits/s speed=2.29x    frame=  838 fps= 70 q=29.0 size=   14080KiB time=00:00:27.86 bitrate=4139.1kbits/s speed=2.32x    frame=  892 fps= 71 q=29.0 size=   14848KiB time=00:00:29.66 bitrate=4100.1kbits/s speed=2.37x    frame=  959 fps= 74 q=29.0 size=   15104KiB time=00:00:31.90 bitrate=3878.8kbits/s speed=2.45x    frame= 1024 fps= 76 q=29.0 size=   15616KiB time=00:00:34.06 bitrate=3755.2kbits/s speed=2.52x    frame= 1092 fps= 78 q=29.0 size=   16384KiB time=00:00:36.33 bitrate=3694.1kbits/s speed=2.59x    frame= 1146 fps= 79 q=29.0 size=   16896KiB time=00:00:38.13 bitrate=3629.7kbits/s speed=2.62x    frame= 1217 fps= 81 q=29.0 size=   17152KiB time=00:00:40.50 bitrate=3469.4kbits/s speed=2.69x    frame= 1263 fps= 81 q=29.0 size=   17664KiB time=00:00:42.03 bitrate=3442.6kbits/s speed= 2.7x    frame= 1315 fps= 82 q=29.0 size=   18176KiB time=00:00:43.76 bitrate=3402.1kbits/s speed=2.73x    frame= 1369 fps= 83 q=29.0 size=   18688KiB time=00:00:45.56 bitrate=3359.7kbits/s speed=2.75x    frame= 1415 fps= 83 q=29.0 size=   19200KiB time=00:00:47.10 bitrate=3339.4kbits/s speed=2.76x    [out#0/mp4 @ 0x561353c08100] video:20110KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.091505%
+frame= 1500 fps= 86 q=-1.0 Lsize=   20128KiB time=00:00:49.93 bitrate=3302.2kbits/s speed=2.85x    
+[libx264 @ 0x561353c07300] frame I:13    Avg QP:20.83  size: 28029
+[libx264 @ 0x561353c07300] frame P:414   Avg QP:24.95  size: 17548
+[libx264 @ 0x561353c07300] frame B:1073  Avg QP:26.62  size: 12081
+[libx264 @ 0x561353c07300] consecutive B-frames:  3.6%  2.0%  3.2% 91.2%
+[libx264 @ 0x561353c07300] mb I  I16..4: 15.4% 70.6% 14.1%
+[libx264 @ 0x561353c07300] mb P  I16..4:  3.2% 27.3%  4.9%  P16..4: 18.4%  6.8%  2.7%  0.0%  0.0%    skip:36.7%
+[libx264 @ 0x561353c07300] mb B  I16..4:  0.9%  6.2%  1.5%  B16..8: 30.4% 10.4%  2.6%  direct: 3.0%  skip:45.0%  L0:49.2% L1:45.8% BI: 4.9%
+[libx264 @ 0x561353c07300] 8x8 transform intra:75.0% inter:66.2%
+[libx264 @ 0x561353c07300] coded y,uvDC,uvAC intra: 46.7% 40.4% 14.9% inter: 12.0% 8.5% 0.4%
+[libx264 @ 0x561353c07300] i16 v,h,dc,p: 54% 18% 10% 18%
+[libx264 @ 0x561353c07300] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 21% 13% 27%  4%  8%  8%  7%  7%  5%
+[libx264 @ 0x561353c07300] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 21% 16% 21%  6%  9%  9%  8%  6%  5%
+[libx264 @ 0x561353c07300] i8c dc,h,v,p: 67% 13% 15%  5%
+[libx264 @ 0x561353c07300] Weighted P-Frames: Y:4.8% UV:3.1%
+[libx264 @ 0x561353c07300] ref P L0: 49.0%  9.5% 24.6% 16.8%  0.2%
+[libx264 @ 0x561353c07300] ref B L0: 78.5% 15.5%  5.9%
+[libx264 @ 0x561353c07300] ref B L1: 92.6%  7.4%
+[libx264 @ 0x561353c07300] kb/s:3294.65

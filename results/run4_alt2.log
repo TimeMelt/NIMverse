@@ -1,0 +1,2 @@
+sim 157s {'sn_rate': 1.0, 'bh_frac': 0.877, 'kick': 0.909, 'rem_bound': 0.717, 'smbh_mass': 0.272, 'agn': 0.465, 'grb': 0.67, 'visible': 0.751, 'merger': 1.0, 'events': 0.797, 'base': 0.855, 'total': 0.82, 'n_sn': 46.0, 'n_ref': 46.0, 'n_tde': 126.0, 'n_merge': 0.0, 'n_grb': 0.0, 'triggered': 211.0}
+events: Counter({'tidal disruption': 126, 'supernova': 46, 'quasar ignition': 26, 'quasar fades': 24}) -> /workspace/nim_universe/out/universe_v4_seed7_alt2.json/.npz

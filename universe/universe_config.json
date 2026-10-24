@@ -1,0 +1,15 @@
+{
+  "seed": 42,
+  "rng": "nim",
+  "n_galaxies": 4,
+  "stars_per_galaxy": 300,
+  "galaxy_spread": 120.0,
+  "planets_range": [3, 7],
+  "moon_prob": 0.6,
+  "max_moons": 3,
+  "galaxy_steps": 4000, "galaxy_dt": 0.004,
+  "system_steps": 6000, "system_dt": 0.005,
+  "frames": 120,
+  "softening": 0.8,
+  "out_dir": "/workspace/nim_universe/out"
+}

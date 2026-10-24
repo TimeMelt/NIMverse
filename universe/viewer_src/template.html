@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>NIM universe viewer</title><style>
+html,body{margin:0;height:100%;overflow:hidden;background:#000;font:13px system-ui,sans-serif;color:#ddd}
+#panel{position:absolute;left:8px;top:8px;bottom:60px;width:210px;overflow:auto;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:6px}
+#panel button{display:block;width:100%;text-align:left;margin:2px 0;padding:4px 6px;background:#0f1a2b;color:#cde;border:1px solid #1d3048;border-radius:4px;cursor:pointer;font-size:12px}
+#panel button:hover{background:#1b2e4a} #panel button.sub{margin-left:12px;width:calc(100% - 12px);opacity:.8}
+.hdr{margin:8px 0 3px;color:#8fc;font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+#mode{position:absolute;left:230px;top:10px;color:#8fc;font-weight:600} #info{position:absolute;right:10px;top:10px;max-width:340px;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:8px;line-height:1.45}
+#bar{position:absolute;left:8px;right:8px;bottom:8px;height:40px;display:flex;gap:10px;align-items:center;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:0 10px}
+#time{flex:1} #play{width:36px} #fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .35s}
+#help{position:absolute;left:230px;bottom:58px;color:#789;font-size:11px}
+</style></head><body><div id="fade"></div><div id="panel"></div><div id="mode"></div><div id="info"></div>
+<div id="help">drag: orbit · scroll: zoom (planet terrain sharpens as you approach) · right-drag: pan · double-click: fly to body</div>
+<div id="bar"><button id="play">❚❚</button><input id="time" type="range" min="0" value="0"><span id="fr"></span> speed <input id="speed" type="range" min="0" max="4" step=".1" value="1" style="width:90px"></div>
+<script>/*THREE*/</script><script>/*ORBIT*/</script><script>window.NIMDATA=/*DATA*/;</script><script>/*SHADERS*/</script><script>/*APP*/</script></body></html>
