@@ -39,3 +39,21 @@ def creatures(cohorts, seed, biosign, ptype, max_total=60):
             out.append(dict(base, cohort=ci, traits={k: round(float(v), 3) for k, v in c["traits"].items()},
                             size=base["size"]*float(.8+.4*r.random()), lat=float(np.arcsin(u)), lon=float(th), heading=float(r.uniform(0, 6.283)), phase=float(r.random()*6.283)))
     return out
+
+def creatures_from_individuals(inds, seed, biosign, ptype, max_show=64):
+    """1:1 meshes from saved literal individuals (life report `individuals`). If there are more than max_show, an evenly
+    spaced subsample over species (then id) is shown; every creature keeps its real id/parent/species/generation.
+    Look is seeded by the individual id (stable across runs); placement clusters by species home range."""
+    pig, tech = biosign.get("pigments", 0.), biosign.get("tech", 0.)
+    inds = sorted(inds, key=lambda d: (d.get("species_id", 0), d["id"]))
+    if len(inds) > max_show: inds = [inds[i] for i in np.linspace(0, len(inds)-1, max_show).astype(int)]
+    out = []
+    for d in inds:
+        tr = {t: float(d["traits"][t]) for t in TRAITS}; sp = int(d.get("species_id", 0))
+        base = phenotype(tr, seed, 10**6 + int(d["id"]), pig, tech, ptype)
+        rs = _rng(seed, 5*10**6 + sp); clat, clon = float(np.arcsin(rs.uniform(-.6, .6))), float(rs.uniform(0, 6.283))
+        r = _rng(seed, 7*10**6 + int(d["id"])); u, th = np.sin(np.clip(clat+.22*r.normal(), -1.3, 1.3)), clon+.3*r.normal()
+        out.append(dict(base, cohort=sp, id=int(d["id"]), parent_id=d.get("parent_id"), species_id=sp, generation=int(d.get("generation", 0)),
+                        age=float(d.get("age", 0.)), energy=float(d.get("energy", 0.)), traits={k: round(v, 3) for k, v in tr.items()},
+                        lat=float(np.arcsin(u)), lon=float(th), heading=float(r.uniform(0, 6.283)), phase=float(r.random()*6.283)))
+    return out

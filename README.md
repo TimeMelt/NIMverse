@@ -52,3 +52,21 @@ Living planet uses the same FS_ROCKY/FS_CLOUD/FS_ATM shaders as the gallery clos
 mobility -> body plan (swimmer/crawler/flyer/floater) + speed + limb count; metabolism_eff -> size & glow strength; reproduction_rate -> segments, smaller bodies;
 hardiness -> shell + spines; biosign pigments -> hue/saturation + bioluminescence; biosign tech -> lit structures. Final cohorts are not stored in the life report,
 so 8 cohorts are synthesised around the recorded final trait means (spread = mutation_sd), deterministic per seed. Click a creature for its traits.
+
+## Individuals + evolution (leaves/individuals.py)
+Organisms are now **literal individuals** (default `model="individuals"` in `life_loop.run_habitat`; legacy cohorts via `model="cohorts"`).
+Each has `id`, `parent_id`, `birth_t_w`, `age`, `energy`, `traits`, `generation`, `species_id`; storage is numpy struct-of-arrays, stepped
+in ≤1-yr substeps. Per year: food (niche resources × `pop_cap`) is split by competitive weight (√need × mobility), basal burn
+depends on metabolism/hardiness/mobility (hardiness and mobility are costly), hazard = base + `sel_strength`·max(0, climate stress − hardiness)
++ starvation; impacts/UV are one-off shocks that hardiness halves; famine (no food) → dormancy (lower burn and starvation hazard).
+Reproduction is Poisson with rate = reproduction_rate × energy-surplus fitness, energy-paid; children inherit the parent's traits +
+gaussian mutation (`mutation_sd × evolution_rate`, 2% of births ×5 jumps), clamped to LIFE_SPACE. Over `pop_cap` the weakest
+(energy/need) are culled. Speciation-lite: a child farther than `speciation_dist` (normalised trait space) from its species founder starts a new species_id.
+New LIFE_SPACE knobs: `evolution_rate`, `pop_cap`, `sel_strength`, `speciation_dist`.
+Report per living planet: `individuals` (all living), `evolution.{evolution_series, deceased_sample (reservoir 200), founding_traits, final_traits, total_births, species_ever}`.
+`viewer_life` builds one mesh per saved individual (≤64 shown, real ids, click shows id/parent/species/generation); the synthesised-herd path is only used for old cohort reports.
+
+    PYTHONPATH=/workspace/NIM python -m universe.run_life --seed 4 --years 40000 --dt 20 --out results/life_demo_seed4.json
+    PYTHONPATH=/workspace/NIM python -m universe.plot_evolution        # -> results/life_evolution_traits_seed4.png
+    PYTHONPATH=/workspace/NIM python -m universe.viewer_life --seed 4 --life results/life_demo_seed4.json && python -m universe.viewer_life_shots --seed 4 --tour 96
+    PYTHONPATH=/workspace/NIM python -m pytest universe/leaves/          # incl. test_evolution.py

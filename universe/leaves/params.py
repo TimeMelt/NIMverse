@@ -11,6 +11,8 @@ LIFE_SPACE = {
     # trait means + mutation
     "metabolism_eff": (.1, .9), "mobility": (0., 1.), "reproduction_rate": (.01, .5), "hardiness": (0., 1.),
     "mutation_sd": (0., .1),
+    # individuals + evolution
+    "evolution_rate": (0., 5.), "pop_cap": (50., 500.), "sel_strength": (0., 3.), "speciation_dist": (.1, .6),
     # host weather (flares)
     "flare_rate_mult": (0., 5.), "flare_amp": (0., 10.),
     # impacts (scale on HabitatState.impact_flux; kill = biomass fraction lost per unit shock)
@@ -19,7 +21,8 @@ LIFE_SPACE = {
     "tech_rate": (0., 1e-2), "tech_threshold": (.1, 2.),
 }
 LIFE_DEFAULTS = {k: (lo+hi)/2 for k, (lo, hi) in LIFE_SPACE.items()}
-LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=2e-4, flare_rate_mult=1., flare_amp=2., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5)
+LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=2e-4, flare_rate_mult=1., flare_amp=2., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5,
+                     evolution_rate=1., pop_cap=300., sel_strength=1., speciation_dist=.4)
 TRAITS = ("metabolism_eff", "mobility", "reproduction_rate", "hardiness")
 
 def clamp(k, v):
