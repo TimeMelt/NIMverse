@@ -22,5 +22,23 @@ Run (NIM checkout on the path):
     PYTHONPATH=/workspace/NIM python -m universe.run_life --seed 4 --years 20000 --dt 20   # -> /workspace/nim_universe/out/life_demo_seed4.json
     PYTHONPATH=/workspace/NIM python -m pytest -q universe/leaves/test_life_leaves.py
 
-Not built yet: culture/tech, radiation observers for BioSignFlux, the NIM life-mesh training loop, and PN/cosmology. The galaxy and event pipeline is unchanged.
+## Deferred leaves (v2)
+
+- **HostWeather** (`packets.py`): Poisson flares (`flare_rate` per yr, M dwarfs flare more), duty cycle, UV/X-ray boosts, `L_now`, a rolling irradiance history (`irr_hist`), and toy wind mass loss `dM_star`. World uses `L_now` and turns flare UV into a `uv_kill` stressor. Chemistry gets a photochemistry boost from `uv_now`/`xray_now`. Knobs: `flare_rate_mult`, `flare_amp`.
+- **Climate history + impacts** (`world.py`): `ClimateHistory` keeps the rolling (t, T, water) record. `impacts()` draws Poisson impacts from `HabitatState.impact_flux*impact_scale`. Each impact gives an impact-winter dT and an `impact_kill` biomass fraction, and both biosphere and organism hardiness consume them.
+- **Radiation / observers** (`radiation.py`): an `ObserverCatalog` takes BioSignFlux emitted at t_emit and delivers it at t_emit + light time (distance in pc, default 10). It applies 1/d² dimming (with an `aperture` multiplier) and a toy Hubble-flow redshift, or a cosmological z through lookback time.
+- **Culture** (`culture.py`): biological-first. It switches on only after organisms have lived ≥1000 world-yr, biomass ≥ `tech_threshold`, and diversity ≥2. Tech then grows logistically at `tech_rate` and shows up in `BioSignFlux.tech`. It is on by default; pass `--no-culture` to disable it.
+- **Cosmology stub** (`cosmology.py`): flat ΛCDM a(t), H(a), Hubble flow, luminosity distance, lookback time, and `CosmoDrive`. It is not wired into sim2.
+- **Strong-field stub** (`strong_field.py`): r_s, Kerr ISCO, TDE radius, γ(r) static and orbital, 1PN precession, and `newtonian_limit_ok()`. It is not a GR solver.
+- **Life training** (`learn_life.py`): numpy SPSA over normalised LIFE_SPACE. The loss is |habitability| + |eco stability| + 2·planted-seed recovery after an 80% disturbance. QrnLOpt was skipped because it is too heavy for this inner loop.
+- **System hook** (`run_life_from_system.py`): make_system → short `leapfrog_tidal` orbit integration (optional toy tide) → life_loop. Optional `--host-mass` / `--dm-frac` hints. The event training scripts are untouched.
+
+Run:
+
+    PYTHONPATH=/workspace/NIM python -m universe.run_life --seed 4 --years 20000 --dt 20 [--distance-pc 10 --no-culture --params results/learned_life.json]
+    PYTHONPATH=/workspace/NIM python -m universe.run_life_from_system --seed 22 --years 20000 --dt 20 --orbit-yr 5 [--tide 1e-6 --host-mass .8]
+    PYTHONPATH=/workspace/NIM python -m universe.learn_life --iters 6 --years 600 --seeds 3   # -> results/learned_life.json + .log
+    PYTHONPATH=/workspace/NIM python -m pytest -q universe/leaves/
+
+Still stubs: no spectra or radiative transfer, no stellar evolution track (dM is wind-only), no GR dynamics, cosmology isn't coupled to the sim, and culture is a single logistic marker.
 Backup from before the leaves: `/workspace/backups/universe_pre_leaves_20261025_163027{.tar.gz,/}`.

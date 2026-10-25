@@ -16,11 +16,35 @@ def water_frac(T, volatiles, snowball, runaway):
 def step(h, hw, LP=None, dt_w_yr=1., stress=None):
     """habitat h, HostWeather hw -> ClimateStress. dt unused in equilibrium v1 (kept for interface)."""
     P = as_bus(LP); A = float(np.clip(ALBEDO[h.ptype]*P["albedo_mult"], 0, .95))
-    T0 = teq(hw.L_star, h.a*(1-h.e**2)**.25, A) + P["greenhouse_K"]*min(1., h.volatiles/.5)
+    T0 = teq(getattr(hw, "L_now", hw.L_star), h.a*(1-h.e**2)**.25, A) + P["greenhouse_K"]*min(1., h.volatiles/.5)
     season = 30.*abs(np.sin(h.tilt))                            # seasonal half-amplitude proxy
     T = T0 + (stress or {}).get("dT", 0.)
     w = .5*(water_frac(T-season, h.volatiles, P["snowball_K"], P["runaway_K"]) + water_frac(T+season, h.volatiles, P["snowball_K"], P["runaway_K"]))
     cls = ("runaway" if T >= P["runaway_K"] else "snowball" if T <= P["snowball_K"] else
            "hot" if T > 323 else "cold" if T < 273 else "temperate")
-    st = dict(uv=float(hw.uv_proxy), flare=float(hw.flare_rate), impact=float(h.impact_flux), season_K=float(season))
+    uvn = float(getattr(hw, "uv_now", hw.uv_proxy)); duty = float(getattr(hw, "flare_duty", 0.))
+    st = dict(uv=uvn, flare=float(hw.flare_rate), flare_duty=duty, xray=float(getattr(hw, "xray_now", 0.)),
+              uv_kill=float(min(.5, .05*max(0., uvn/max(hw.uv_proxy, 1e-9) - 1.))),   # flare UV sterilises surface fraction
+              impact=float(h.impact_flux), season_K=float(season))
     st.update(stress or {}); return ClimateStress(float(T), w, cls, st)
+
+def impacts(h, LP, rng, dt_w_yr=1.):
+    """Stochastic impacts: Poisson(impact_flux*impact_scale*dt/1000) events per step.  Each event -> transient
+    impact-winter dT (-15 K) and a biomass kill fraction impact_kill (compounded).  Returns stress dict."""
+    P = as_bus(LP); lam = h.impact_flux*P["impact_scale"]*dt_w_yr/1000.
+    n = int(rng.poisson(lam)) if lam > 0 else 0
+    if not n: return {"impacts": 0}
+    return {"impacts": n, "dT": -15.*min(n, 3), "impact_kill": float(1 - (1 - P["impact_kill"])**n)}
+
+class ClimateHistory:
+    """Rolling (t, T, water_frac, class) history for a world (bounded length)."""
+    def __init__(self, n=200): self.n, self.rows, self.impacts = n, [], 0
+    def push(self, t, c):
+        self.rows.append((float(t), c.T_K, c.liquid_water_frac, c.climate_class)); del self.rows[:-self.n]
+        self.impacts += int(c.stressors.get("impacts", 0))
+    def summary(self):
+        if not self.rows: return {}
+        T = np.array([r[1] for r in self.rows]); W = np.array([r[2] for r in self.rows])
+        return dict(n=len(self.rows), T_mean=float(T.mean()), T_std=float(T.std()), T_min=float(T.min()), T_max=float(T.max()),
+                    water_mean=float(W.mean()), water_min=float(W.min()), impacts_total=self.impacts,
+                    tail=[[r[0], round(r[1], 2), round(r[2], 3), r[3]] for r in self.rows[-5:]])

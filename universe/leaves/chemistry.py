@@ -12,7 +12,7 @@ def init_chem(h):
 def step(chem, climate, hw, LP=None, dt_w_yr=1.):
     P = as_bus(LP); s = dict(chem.species); w = climate.liquid_water_frac
     temp_ok = np.exp(-((climate.T_K-300.)/60.)**2)
-    rate = P["chem_rate"]*(1 + P["photo_boost"]*min(hw.uv_proxy + hw.flare_rate, 3.))*temp_ok*(.2 + w)
+    rate = P["chem_rate"]*(1 + P["photo_boost"]*min(getattr(hw, "uv_now", hw.uv_proxy) + hw.flare_rate + .1*getattr(hw, "xray_now", 0.), 6.))*temp_ok*(.2 + w)
     lim = min(s[k]/STOICH[k] for k in STOICH)                    # limiting reagent
     make = min(lim, rate*lim*dt_w_yr*2e-2); decay = s["organics"]*1e-3*dt_w_yr*(1. + (climate.T_K > 373))
     d = make - decay

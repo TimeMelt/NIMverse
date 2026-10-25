@@ -10,14 +10,16 @@ def step(cohorts, niche, climate, LP, rng, dt_w_yr=1.):
     """Consume niche resources, reproduce if energy budget closes, die under stress. Returns (cohorts, CreaturePacket)."""
     P = as_bus(LP); res = max(0., niche.resources)*dt_w_yr; births = deaths = 0.; out = []
     demand = sum(c["n"]*(1 - .5*c["traits"]["metabolism_eff"]) for c in cohorts) + 1e-12
-    stress = (1 - climate.liquid_water_frac) + (abs(climate.T_K-293.)/80.)
+    st = climate.stressors or {}
+    stress = (1 - climate.liquid_water_frac) + (abs(climate.T_K-293.)/80.) + 2*st.get("impact_kill", 0.) + st.get("uv_kill", 0.)
     for c in cohorts:
         tr = c["traits"]; need = c["n"]*(1 - .5*tr["metabolism_eff"])
         got = res*need/demand*(1 + .2*tr["mobility"]) if res > 0 else 0.; got = min(got, res*need/demand*1.2)
         e = max(0., c["energy"] + got - need*dt_w_yr*.1)               # energy budget never negative
         b = tr["reproduction_rate"]*c["n"]*dt_w_yr if (got > 0 and e > need*.1) else 0.
         cost = b*.1; b = b if e >= cost else 0.; e -= cost if b else 0.
-        d = c["n"]*min(1., (.05 + max(0., stress - tr["hardiness"]) + (1. if got <= 0 else 0.)*.5)*dt_w_yr)
+        rate = .05 + .05*max(0., stress - tr["hardiness"]) + (1. if got <= 0 else 0.)*.5     # per world-yr
+        d = c["n"]*(1 - np.exp(-rate*dt_w_yr))                         # exact for constant rate (dt-stable)
         n = max(0., c["n"] + b - d); births += b; deaths += d
         if n >= .5:
             if b and rng.random() < .05:                               # mutant split

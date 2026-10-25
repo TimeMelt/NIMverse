@@ -1,0 +1,8 @@
+[learn_life] it0 loss=1.9964 parts(hab,eco,rec)=[0.0389, 0.6242, 0.6667]
+[learn_life] it1 loss=2.0527 parts=[0.0944, 0.6249, 0.6667] best=1.9964 (0s)
+[learn_life] it2 loss=1.9973 parts=[0.0389, 0.6251, 0.6667] best=1.9964 (0s)
+[learn_life] it3 loss=1.3309 parts=[0.0389, 0.6253, 0.3333] best=1.3309 (0s)
+[learn_life] it4 loss=0.6638 parts=[0.0389, 0.6249, 0.0] best=0.6638 (0s)
+[learn_life] it5 loss=0.6644 parts=[0.0389, 0.6255, 0.0] best=0.6638 (0s)
+[learn_life] it6 loss=0.6643 parts=[0.0389, 0.6254, 0.0] best=0.6638 (0s)
+wrote /workspace/nim-universe/results/learned_life.json

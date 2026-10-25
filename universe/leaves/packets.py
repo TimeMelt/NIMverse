@@ -15,11 +15,30 @@ class TideLink(_P):
 
 @dataclass
 class HostWeather(_P):
-    """Stellar forcing. v1 stub from M/L; future Radiation leaf fills flares/irradiance spectra."""
+    """Stellar forcing: M/L/Teff + Poisson flare model (rate per yr, duty cycle, UV/X boosts) + rolling irradiance
+    history + toy wind mass loss dM_star (Msun, <=0).  Call .step(t, dt, rng, LP) each world step; *_now fields are
+    the instantaneous (step-averaged) values consumed by World/Chemistry."""
     M_star: float = 1.; L_star: float = 1.; T_eff: float = 5800.; dM_star: float = 0.; flare_rate: float = 0.; uv_proxy: float = 1.
+    flare_dur_yr: float = 1e-3; flare_duty: float = 0.; L_now: float = 1.; uv_now: float = 1.; xray_now: float = 0.
+    n_flares: int = 0; irr_hist: list = field(default_factory=list); hist_len: int = 64; distance_pc: float = 10.
     @classmethod
-    def from_star(cls, M, L, T):
-        return cls(M, L, T, 0., float(0.5/max(M, .08)**2 if M < .6 else .05), float((T/5800.)**4))
+    def from_star(cls, M, L, T, distance_pc=10.):
+        fr = float(0.5/max(M, .08)**2 if M < .6 else .05); uv = float((T/5800.)**4)
+        return cls(M, L, T, 0., fr, uv, L_now=float(L), uv_now=uv, distance_pc=float(distance_pc))
+    def mdot(self): return 2e-14*self.L_star**.5*(1 + 10*self.flare_rate)      # Msun/yr, solar wind ~2e-14
+    def step(self, t, dt, rng, LP=None):
+        P = as_bus(LP); lam = self.flare_rate*P["flare_rate_mult"]*dt; n = int(rng.poisson(lam)) if lam > 0 else 0
+        duty = min(1., n*self.flare_dur_yr/max(dt, 1e-9)); amp = P["flare_amp"]
+        self.flare_duty = float(duty); self.n_flares += n
+        self.uv_now = float(self.uv_proxy*(1 + amp*duty)); self.xray_now = float(amp*duty*(1 + 4*(self.M_star < .6)))
+        self.L_now = float(self.L_star*(1 + .01*amp*duty)); self.dM_star -= self.mdot()*dt
+        self.irr_hist.append([float(t), self.L_now, self.uv_now, self.xray_now, int(n)]); del self.irr_hist[:-self.hist_len]
+        return self
+    def summary(self):
+        h = self.irr_hist; u = [x[2] for x in h]
+        return dict(M_star=self.M_star, L_star=self.L_star, flare_rate=self.flare_rate, n_flares=self.n_flares, dM_star=self.dM_star,
+                    uv_mean=float(sum(u)/len(u)) if u else self.uv_proxy, uv_max=float(max(u)) if u else self.uv_proxy,
+                    flare_steps=int(sum(x[4] > 0 for x in h)), hist_tail=h[-8:], distance_pc=self.distance_pc)
 
 @dataclass
 class HabitatState(_P):
@@ -49,7 +68,7 @@ class CreaturePacket(_P):
 
 @dataclass
 class BioSignFlux(_P):
-    """Observable gases/pigments. Consumers (radiation observers / spectra) deferred."""
+    """Observable gases/pigments/tech markers; consumed by leaves.radiation observers."""
     o2: float = 0.; ch4: float = 0.; pigments: float = 0.; tech: float = 0.
 
 @dataclass
