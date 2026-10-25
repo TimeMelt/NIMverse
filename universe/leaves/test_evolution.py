@@ -128,6 +128,7 @@ def test_tradeoffs_keep_met_rep_off_ceiling():
         assert not (met.mean() > .9 and rep.mean() > .9) and met.std() > .03 and rep.std() > .03
     tr = np.tile(pop.traits.mean(0), (2, 1)); tr[0, I.MET], tr[1, I.MET] = .2, .9
     assert I.uptake(tr)[0] > 1.1*I.uptake(tr)[1]                     # rate-yield cost of efficiency
+    x = np.linspace(.1, .9, 5)[:, None]*np.ones((1, len(I.TRAITS))); u = I.uptake(x); assert (np.diff(u, 2) < 0).all()   # convex cost (interior optimum)
     tr[:, I.MET] = .5; tr[0, I.REP], tr[1, I.REP] = .05, .5
     assert I.need_of(tr)[1] > 1.15*I.need_of(tr)[0]                  # breeding upkeep
 
@@ -150,6 +151,46 @@ def test_climate_drift_moves_world_T():
         pl = [q for q in J["planets"] if "climate_history" in q][0]; out[a] = pl["climate_history"]
     assert out[.8]["T_std"] > 3*out[0.]["T_std"] + .5, (out[0.]["T_std"], out[.8]["T_std"])
     assert np.ptp([r[1] for r in out[.8]["series"]]) > 5.
+
+# ---- cold-spell floor, species churn, metabolism smoothing, path history ----
+def _demo(drift=None, years=40000):
+    from ..run_life import main
+    p = f"/tmp/life_floor_{drift}.json"; args = ["--seed", "4", "--years", str(years), "--dt", "20", "--out", p]
+    if drift is not None: LPf = p + ".lp.json"; json.dump({"climate_drift": drift}, open(LPf, "w")); args += ["--params", LPf]
+    J = main(args); return [q for q in J["planets"] if q.get("evolution")][0]
+
+def test_cold_spell_floor_species_churn_metabolism_seed4():
+    pl = _demo(); e = pl["evolution"]; s = e["evolution_series"]
+    n = np.array([x["n_alive"] for x in s]); sa = np.array([x["n_species_alive"] for x in s])
+    assert n[-1] > 0 and n[3:].min() >= 80, n.min()                   # cold spells no longer shrink to ~30 (founders = 40)
+    assert e["n_species_ever"] <= 120 and 3 <= np.median(sa) <= 15, (e["n_species_ever"], np.median(sa))
+    m = np.array([x["trait_means"]["metabolism_eff"] for x in s]); h = len(m)//2
+    assert m[3:].std() < .08 and m[h:].std() < .08 and np.ptp(m[h:]) < .35 and .2 < m[h:].mean() < .8, (m[:h].std(), m[h:].std(), m[h:].mean())   # was std .12, .5-.84 swings
+    ind = pl["individuals"]; tr = [d for d in ind if d.get("trail")]
+    assert len(tr) > .8*len(ind) and all(len(d["trail"]) <= I.TRAIL_K for d in tr)
+    mv = [np.arccos(np.clip(np.dot(*[[np.cos(a)*np.cos(b), np.sin(a), np.cos(a)*np.sin(b)] for a, b in (d["trail"][0], d["trail"][-1])]), -1, 1)) for d in tr]
+    assert np.median(mv) > .05                                       # recorded paths actually relocate (viewer replay)
+
+def test_strong_drift_no_extinction():
+    for a in (.8, 1.):
+        n = [x["n_alive"] for x in _demo(a)["evolution"]["evolution_series"]]
+        assert n[-1] > 0 and min(n[3:]) >= 50, (a, min(n))
+
+def test_food_lag_bounds_metabolism_oscillation():
+    LP = LifeParamBus({"climate_drift": 1.}); r = np.random.default_rng(5); pop = I.found(LP, r)
+    raw, felt = [], []
+    for k in range(1300):                                             # 26 kyr = 2 food cycles at full amplitude
+        pop, _ = I.step(pop, FOOD, MILD, LP, r, 20., series_every=400.)
+        raw.append(I.food_mult(pop, LP)); felt.append(pop.food_buf)
+    assert np.ptp(felt[300:]) < .7*np.ptp(raw[300:])                 # lagged (stored) productivity: damped swing
+    m = np.array([x["trait_means"]["metabolism_eff"] for x in pop.series[10:]])
+    assert len(pop) > 50 and m.max() < .86 and m.min() > .2 and np.ptp(m) < .45, (m.min(), m.max())
+
+def test_cold_refuge_and_acclimation_unit():
+    r = np.random.default_rng(2); pop = I.found(None, r, traits=dict(hardiness=.3))
+    harsh = ClimateStress(240., .3, "cold")
+    for _ in range(300): pop, _ = I.step(pop, FOOD, harsh, None, r, 20.)
+    assert len(pop) > 20 and pop.accl > .1                             # plastic acclimation + refugia: no extinction
 
 if __name__ == "__main__":
     for k, f in list(globals().items()):

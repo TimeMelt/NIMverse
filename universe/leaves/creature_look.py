@@ -59,5 +59,5 @@ def creatures_from_individuals(inds, seed, biosign, ptype, max_show=64):
             lat, lon, real = float(np.clip(clat+.22*r.normal(), -1.3, 1.3)), float(clon+.3*r.normal()), False
         out.append(dict(base, cohort=sp, id=int(d["id"]), parent_id=d.get("parent_id"), parent2_id=d.get("parent2_id"), species_id=sp, real_pos=real, generation=int(d.get("generation", 0)),
                         age=float(d.get("age", 0.)), energy=float(d.get("energy", 0.)), traits={k: round(v, 3) for k, v in tr.items()},
-                        lat=lat, lon=lon, heading=float(r.uniform(0, 6.283)), phase=float(r.random()*6.283)))
+                        lat=lat, lon=lon, trail=((d["trail"] + [[lat, lon]]) if real and d.get("trail") else None), heading=float(r.uniform(0, 6.283)), phase=float(r.random()*6.283)))
     return out

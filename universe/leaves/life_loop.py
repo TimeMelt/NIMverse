@@ -30,6 +30,8 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         if drift is not None: stress.update(drift.step(t, dt, drng))          # planetary climate drift (T, water, class, stress)
         stress.update({k: v for k, v in imp.items() if k != "dT"}); stress["dT"] += imp.get("dT", 0.); stress["impact_dT"] = imp.get("dT", 0.)
         clim = world.step(h, hw, P, dt, stress); hist.push(t, clim)
+        if stress["impact_dT"]:      # impact winter freezes water briefly: the shock is the kill, chronic stress uses pre-impact water
+            clim.stressors["water_chronic"] = world.step(h, hw, P, dt, dict(stress, dT=stress["dT"] - stress["impact_dT"])).liquid_water_frac
         chem = chemistry.step(chem, clim, hw, P, dt)
         gate = chemistry.abiogenesis_roll(chem, clim, P, rng, t, dt, gate)
         bio = biosphere.seed(bio, gate); m0 = bio.total()

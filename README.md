@@ -86,3 +86,17 @@ New knobs: `sex_rate`, `climate_drift`, `impact_refuge`.
     PYTHONPATH=/workspace/NIM python -m universe.plot_evolution        # -> results/life_evolution_traits_seed4.png
     PYTHONPATH=/workspace/NIM python -m universe.viewer_life --seed 4 --life results/life_demo_seed4.json && python -m universe.viewer_life_shots --seed 4 --tour 96
     PYTHONPATH=/workspace/NIM python -m pytest universe/leaves/          # incl. test_evolution.py
+
+## Imperfection fixes 2 (seed 4, 40k yr)
+
+| metric | before (15d5812) | after |
+|---|---|---|
+| min living pop (after founding) | 37 | 110 (no extinction; drift .8/1.0 min ≈106/95) |
+| species ever / alive (median, end) | 285 / 11, 15 | 84 / 5, 6 |
+| metabolism mean ± std | .68 ± .118 (2nd half .50–.84, boom-bust) | .39 ± .055 (2nd half .23–.52) |
+
+- Cold spells: refugia (hazard × clip(n/.5cap,.2,1)), non-heritable acclimation (≤.15, τ 600 yr), saturating stress hazard, torpor; impact-winter freeze no longer counts as chronic water stress.
+- Species churn: reclustering every 500 yr, new-species threshold .06, hysteresis, min 4 clusters.
+- Metabolism: food storage low-pass (τ 5000 yr) on resources × food_mult; convex rate–yield trade-off (interior optimum, no bang-bang).
+- Viewer: individuals record a 24-point movement trail (every 10 yr, inherited from parent); `life.js` replays it over ~10 s with a fading line, then wanders; jitter fallback when no trail.
+- Tests: `test_cold_spell_floor_species_churn_metabolism_seed4`, `test_strong_drift_no_extinction`, `test_food_lag_bounds_metabolism_oscillation`, `test_cold_refuge_and_acclimation_unit`.

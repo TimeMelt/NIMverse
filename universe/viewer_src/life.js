@@ -51,7 +51,17 @@ function creature(k){const c=C[k], g=new THREE.Group(), body=new THREE.Group(); 
  const p0=new V3(Math.cos(c.lat)*Math.cos(c.lon),Math.sin(c.lat),Math.cos(c.lat)*Math.sin(c.lon)); let e=new V3(0,1,0).cross(p0).normalize(), n=p0.clone().cross(e);
  const t0=e.multiplyScalar(Math.cos(c.heading)).add(n.multiplyScalar(Math.sin(c.heading))).normalize();
  const alt={swimmer:1.0045,crawler:1.006,flyer:1.04,floater:1.012}[c.plan];
- return {g,body,limbs,c,p0,t0,alt,w:c.speed*.012};}
+ let path=null, line=null;                                     // recorded path (oldest -> newest lat/lon samples): replayed, drawn as a fading trail
+ if(c.trail&&c.trail.length>=2){path=c.trail.map(([la,lo])=>new V3(Math.cos(la)*Math.cos(lo),Math.sin(la),Math.cos(la)*Math.sin(lo)));
+  const pts=[], cols=[]; const col=new THREE.Color(...c.accent);
+  for(let i=0;i<path.length-1;i++) for(let j=0;j<6;j++){const u=(i+j/6)/(path.length-1); pts.push(pathAt(path,u).multiplyScalar(alt*1.0015)); const f=.15+.85*u; cols.push(col.r*f,col.g*f,col.b*f);}
+  pts.push(path[path.length-1].clone().multiplyScalar(alt*1.0015)); cols.push(col.r,col.g,col.b);
+  const gg=new THREE.BufferGeometry().setFromPoints(pts); gg.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
+  line=new THREE.Line(gg,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:.85,depthWrite:false})); scene.add(line);}
+ return {g,body,limbs,c,p0,t0,alt,w:c.speed*.012,path,line};}
+function pathAt(P,u){u=Math.min(1,Math.max(0,u))*(P.length-1); const i=Math.min(P.length-2,Math.floor(u)), f=u-i; return P[i].clone().multiplyScalar(1-f).add(P[i+1].clone().multiplyScalar(f)).normalize();}
+const REPLAY=10;   // time units for one replay of the recorded path (oldest sample -> current position), then hold
+function replayU(t){return Math.min(1,Math.max(0,(t-1)/REPLAY));}
 for(let k=0;k<C.length;k++) crs.push(creature(k));
 // tech: lit structures + city lights near herds of the most mobile cohort
 const tech=[]; if(D.tech>0){let x=99; const rnd=()=>{x=(x*16807)%2147483647; return x/2147483647;}; const base=crs[0].p0;
@@ -60,9 +70,12 @@ const tech=[]; if(D.tech>0){let x=99; const rnd=()=>{x=(x*16807)%2147483647; ret
   const l=spr(new THREE.Color(1,.8,.45),4,1); l.position.y=2.8; g.add(l); g.position.copy(p).multiplyScalar(1.004); g.quaternion.setFromUnitVectors(new V3(0,1,0),p); g.scale.setScalar(SC); scene.add(g); tech.push(g);}}
 // ---- time / animation ----
 let T=0, mode='orbit', sel=-1; const up=new V3(), tmp=new V3();
-function place(cr,t){const c=cr.c, a=c.real_pos?.025*Math.sin(cr.w*t*6+c.phase):cr.w*t,   // real positions: small local wander around the simulated lat/lon
- mean=.25*Math.sin(t*.3+c.wobble);
- const p=cr.p0.clone().multiplyScalar(Math.cos(a)).add(cr.t0.clone().multiplyScalar(Math.sin(a))); const fw=cr.t0.clone().multiplyScalar(Math.cos(a)).sub(cr.p0.clone().multiplyScalar(Math.sin(a)));
+function place(cr,t){const c=cr.c; let p, fw, mean=.25*Math.sin(t*.3+c.wobble);
+ if(cr.path){const u=replayU(t), du=.004; p=pathAt(cr.path,u); const q=pathAt(cr.path,Math.min(1,u+du)), q0=pathAt(cr.path,Math.max(0,u-du));   // replay recorded path
+  fw=q.sub(q0); fw.sub(p.clone().multiplyScalar(fw.dot(p))); if(fw.lengthSq()<1e-12) fw=cr.t0.clone(); fw.normalize(); mean*=.3;
+  if(u>=1){const a=.01*Math.sin(cr.w*t*6+c.phase); p.add(fw.clone().multiplyScalar(a)).normalize();}}           // arrived: small local wander
+ else{const a=c.real_pos?.025*Math.sin(cr.w*t*6+c.phase):cr.w*t;   // no trail: local wander around simulated lat/lon (legacy: herd orbit)
+  p=cr.p0.clone().multiplyScalar(Math.cos(a)).add(cr.t0.clone().multiplyScalar(Math.sin(a))); fw=cr.t0.clone().multiplyScalar(Math.cos(a)).sub(cr.p0.clone().multiplyScalar(Math.sin(a)));}
  fw.applyAxisAngle(p,mean).normalize(); let h=cr.alt; const ph=t*c.speed*6+c.phase;
  if(c.plan==='crawler'&&c.traits.mobility>.5) h+=.004*Math.max(0,Math.sin(ph*.5)); if(c.plan==='flyer') h+=.01*Math.sin(t*.7+c.phase); if(c.plan==='floater') h+=.004*Math.sin(t*1.3+c.phase);
  cr.g.position.copy(p).multiplyScalar(h); const m=new THREE.Matrix4(); const xx=p.clone().cross(fw).normalize(); m.makeBasis(xx.negate(),p,fw); cr.g.quaternion.setFromRotationMatrix(m);
