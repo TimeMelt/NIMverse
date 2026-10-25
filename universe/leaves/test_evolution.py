@@ -166,6 +166,7 @@ def test_cold_spell_floor_species_churn_metabolism_seed4():
     assert e["n_species_ever"] <= 120 and 3 <= np.median(sa) <= 15, (e["n_species_ever"], np.median(sa))
     m = np.array([x["trait_means"]["metabolism_eff"] for x in s]); h = len(m)//2
     assert m[3:].std() < .08 and m[h:].std() < .08 and np.ptp(m[h:]) < .35 and .2 < m[h:].mean() < .8, (m[:h].std(), m[h:].std(), m[h:].mean())   # was std .12, .5-.84 swings
+    assert .45 < m[h:].mean() < .72 and m[h:].std() <= 1.15*m[3:h].std(), (m[h:].mean(), m[3:h].std(), m[h:].std())   # mid-range (was .39), not boom-bust
     ind = pl["individuals"]; tr = [d for d in ind if d.get("trail")]
     assert len(tr) > .8*len(ind) and all(len(d["trail"]) <= I.TRAIL_K for d in tr)
     mv = [np.arccos(np.clip(np.dot(*[[np.cos(a)*np.cos(b), np.sin(a), np.cos(a)*np.sin(b)] for a, b in (d["trail"][0], d["trail"][-1])]), -1, 1)) for d in tr]
@@ -191,6 +192,35 @@ def test_cold_refuge_and_acclimation_unit():
     harsh = ClimateStress(240., .3, "cold")
     for _ in range(300): pop, _ = I.step(pop, FOOD, harsh, None, r, 20.)
     assert len(pop) > 20 and pop.accl > .1                             # plastic acclimation + refugia: no extinction
+
+# ---- mid-range metabolism, RNG robustness, separate streams, brine floor ----
+def test_metabolism_midrange_robust_across_seeds():
+    ms = []
+    for sd in range(4):
+        r = np.random.default_rng(sd); LP = LifeParamBus({"climate_drift": 1.}); pop = I.found(LP, r)
+        for _ in range(900): pop, _ = I.step(pop, FOOD, COLD, LP, r, 20., series_every=400.)
+        n = [x["n_alive"] for x in pop.series[3:]]; assert min(n) >= 80, (sd, min(n))   # no extinction cliff on any seed
+        ms.append(np.mean([x["trait_means"]["metabolism_eff"] for x in pop.series[len(pop.series)//2:]]))   # 2nd-half time mean
+    assert .4 < np.mean(ms) < .65 and np.ptp(ms) < .15, ms          # interior optimum (range .1-.9), consistent across seeds
+
+def test_organism_rng_stream_isolated():
+    from ..run_life import main
+    g = []
+    for nf in (40, 41):                                               # different organism draws must not move world events
+        import sys; L = sys.modules["universe.leaves.life_loop"]; old = L.run_habitat.__defaults__
+        d = list(old); d[-1] = nf; L.run_habitat.__defaults__ = tuple(d)
+        try: J = main(["--seed", "4", "--years", "6000", "--dt", "20", "--no-culture", "--out", f"/tmp/life_rng_{nf}.json"])
+        finally: L.run_habitat.__defaults__ = old
+        pl = [q for q in J["planets"] if "gate" in q]; g.append([(q["gate"]["t_w"], q["impacts"]["events"]) for q in pl])
+    assert g[0] == g[1], g
+
+def test_brine_cold_floor():
+    from . import chemistry as C
+    from .packets import ChemInventory
+    ch = ChemInventory(dict(C=1, H=4, O=2, N=.5, P=.05, S=.1, organics=1.), 0.)
+    class HW: uv_proxy = 0.; flare_rate = 0.
+    assert C.step(ch, ClimateStress(245., .3, "cold"), HW()).polymer_ready
+    assert not C.step(ch, ClimateStress(230., .3, "cold"), HW()).polymer_ready
 
 if __name__ == "__main__":
     for k, f in list(globals().items()):

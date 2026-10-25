@@ -28,7 +28,7 @@ LAT_STRESS = .3       # poles harsher than equator (mean zero over the sphere): 
 NZ, NL = 6, 12        # equal-area density grid (z bands x lon sectors)
 KEYS = ("id", "parent", "parent2", "birth", "energy", "traits", "gen", "species", "pos", "trail")
 
-UPT0, UPT1, UPT2 = 1.15, 0., .3   # rate-yield: uptake 1.15 - UPT1 x - UPT2 x^2 (x = normalised met); convex -> stable interior optimum (was linear .2 x: bang-bang)
+UPT0, UPT1, UPT2 = 1.15, 0., .22  # rate-yield: uptake 1.15 - UPT1 x - UPT2 x^2 (x = normalised met); convex -> stable interior optimum (was linear .2 x: bang-bang)
 UPT_REP = 1.          # brood growth ~ uptake (efficiency also slows reproduction, binding even when food is plentiful)
 HARD_MET = .05       # efficient metabolisms have less stress reserve: hardiness_eff = hardiness x (1 - HARD_MET x met)
 REP_UPKEEP = .6     # basal cost of reproductive machinery per unit reproduction_rate (rep in [.01,.5] -> up to +60% burn)

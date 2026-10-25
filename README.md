@@ -100,3 +100,18 @@ New knobs: `sex_rate`, `climate_drift`, `impact_refuge`.
 - Metabolism: food storage low-pass (τ 5000 yr) on resources × food_mult; convex rate–yield trade-off (interior optimum, no bang-bang).
 - Viewer: individuals record a 24-point movement trail (every 10 yr, inherited from parent); `life.js` replays it over ~10 s with a fading line, then wanders; jitter fallback when no trail.
 - Tests: `test_cold_spell_floor_species_churn_metabolism_seed4`, `test_strong_drift_no_extinction`, `test_food_lag_bounds_metabolism_oscillation`, `test_cold_refuge_and_acclimation_unit`.
+
+## Imperfection fixes 3 (seed 4, 40k yr)
+
+| metric | before (34708f7) | after |
+|---|---|---|
+| metabolism mean ± std (range .1–.9) | .39 ± .055 (std 1st/2nd half .049/.060) | .53 ± .068 (1st/2nd half std .068/.068; 2nd half .34–.66) |
+| reproduction (2nd-half mean, cap .5) | .18 | .18 |
+| min living pop / species ever / alive (median, end) | 110 / 84 / 5, 6 | 126 / 102 / 5, 7 |
+
+- Metabolism: rate–yield curvature `UPT2` .3 → .22 moves the interior optimum to mid-range (still convex, off ceiling).
+- RNG: organisms draw from their own stream (`life_loop`: `default_rng([a, 23])`), so founder count / organism draws never shift impact or abiogenesis timing (test `test_organism_rng_stream_isolated`). Seed-robustness test: 4 rng seeds × drift 1.0, 18 kyr, no pop < 80, 2nd-half metabolism means within .15.
+  Sweep of 8 rng seeds × drift .5/1.0 (24 kyr, cold niche): metabolism .45–.53, min pop 139–186, no extinction.
+- Cold floor: polymer chemistry works down to 240 K (eutectic brines; `chemistry.T_BRINE`, was 250 K) → cold ocean worlds like seed 7 become abiogenesis-ready.
+- Seed scan (40 kyr, dt 20, defaults): life on 4, 6, 8 of seeds 0–9 and 12 of 10–19 (4/20). The rest have no candidate wet world: frozen (no liquid water, 190–245 K: seeds 1, 5, 10, 11, 15), dry deserts (water < .1 or organics below threshold) or gas giants only; seed 7's 247 K ocean is now ready but p≈5e-4/step did not fire in 40 kyr.
+- `viewer_life_shots` copies all stills (01–06) into `results/`.

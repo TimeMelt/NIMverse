@@ -4,6 +4,7 @@ conserved in synthesis/decay; outgassing/escape are ignored (closed box)."""
 import numpy as np
 from .packets import ChemInventory, AbiogenesisGate, as_bus
 
+T_BRINE = 240.   # cold floor for polymer chemistry: eutectic brines/ice-vein concentration keep wet chemistry going below 250 K
 STOICH = dict(C=1., H=2., O=1., N=.05, P=.005)
 
 def init_chem(h):
@@ -18,7 +19,7 @@ def step(chem, climate, hw, LP=None, dt_w_yr=1.):
     d = make - decay
     for k, c in STOICH.items(): s[k] = max(0., s[k] - c*d)
     s["organics"] = max(0., s["organics"] + d)
-    pr = bool(w > .05 and 250. < climate.T_K < 373. and s["organics"] > P["organic_thresh"])
+    pr = bool(w > .05 and T_BRINE < climate.T_K < 373. and s["organics"] > P["organic_thresh"])
     vr = bool(pr and s["P"] > .01 and w > .1)
     return ChemInventory(s, float(chem.redox - .1*d), pr, vr)
 

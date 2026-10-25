@@ -20,6 +20,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
     P = as_bus(LP); hw = copy.deepcopy(hw); chem = chemistry.init_chem(h); gate = chemistry.planted_gate(0.) if plant else None
     bio = biosphere.Biosphere(); coh = []; pop = None; ser_every = max(dt, years/200.); series = []; clim = None; pkt = None; flux = None
     drng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 11])        # own stream: drift does not perturb the main rng draws
+    orng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 23])        # own stream for organisms: life draws never shift impacts/abiogenesis timing
     drift = world.ClimateDrift(P["climate_drift"], drng) if P["climate_drift"] > 0 else None
     hist = world.ClimateHistory(n=4000); cu = culture_mod.Culture(); kill_tot = 0.; n_imp = 0; impact_loss = 0.
     for k in range(int(years/dt)):
@@ -38,9 +39,9 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist)
         if clim.stressors.get("impacts"): n_imp += clim.stressors["impacts"]; impact_loss += m0*clim.stressors["impact_kill"]
         if model == "individuals":
-            if bio.alive and t >= organisms_after and pop is None and bio.P > .05: pop = individuals.found(P, rng, n_founders, t)
+            if bio.alive and t >= organisms_after and pop is None and bio.P > .05: pop = individuals.found(P, orng, n_founders, t)
             if pop is not None and len(pop):
-                pop, pkt = individuals.step(pop, niche, clim, P, rng, dt, t, ser_every); bio = biosphere.apply_creatures(bio, pkt)
+                pop, pkt = individuals.step(pop, niche, clim, P, orng, dt, t, ser_every); bio = biosphere.apply_creatures(bio, pkt)
             coh = pop is not None and len(pop) > 0
         elif bio.alive and t >= organisms_after and not coh and bio.P > .05: coh = organisms.new_cohorts(P, rng)
         if coh and model != "individuals":

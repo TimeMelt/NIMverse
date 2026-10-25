@@ -22,7 +22,7 @@ async def main(a):
                 await pg.evaluate(f"NIM.setTime({3+i*.12});NIM.view('surface',0,{{dist:{d},az:{s*2.5}}})"); await pg.screenshot(path=f"{td}/f{i:04d}.png")
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "24", "-i", f"{td}/f%04d.png", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", f"{OUT}/life_creatures_seed{a.seed}.mp4"], check=True)
         print("errors:", len(errs), errs[:5]); await b.close()
-    for n in ("01_orbit", "02_surface", "04_creature"): shutil.copy(f"{pre}_{n}.png", RES)
+    for n, _ in shots: shutil.copy(f"{pre}_{n}.png", RES)       # all stills (01-06) -> results/
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--seed", type=int, default=4); ap.add_argument("--tour", type=int, default=0)
     ap.add_argument("--herd2", type=int, default=30); ap.add_argument("--c1", type=int, default=0); ap.add_argument("--c2", type=int, default=40)
