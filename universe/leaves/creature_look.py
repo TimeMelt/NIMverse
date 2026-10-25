@@ -43,7 +43,8 @@ def creatures(cohorts, seed, biosign, ptype, max_total=60):
 def creatures_from_individuals(inds, seed, biosign, ptype, max_show=64):
     """1:1 meshes from saved literal individuals (life report `individuals`). If there are more than max_show, an evenly
     spaced subsample over species (then id) is shown; every creature keeps its real id/parent/species/generation.
-    Look is seeded by the individual id (stable across runs); placement clusters by species home range."""
+    Look is seeded by the individual id (stable across runs); placement = the individual's simulated lat/lon
+    (legacy reports without positions fall back to species home-range herds)."""
     pig, tech = biosign.get("pigments", 0.), biosign.get("tech", 0.)
     inds = sorted(inds, key=lambda d: (d.get("species_id", 0), d["id"]))
     if len(inds) > max_show: inds = [inds[i] for i in np.linspace(0, len(inds)-1, max_show).astype(int)]
@@ -51,9 +52,12 @@ def creatures_from_individuals(inds, seed, biosign, ptype, max_show=64):
     for d in inds:
         tr = {t: float(d["traits"][t]) for t in TRAITS}; sp = int(d.get("species_id", 0))
         base = phenotype(tr, seed, 10**6 + int(d["id"]), pig, tech, ptype)
-        rs = _rng(seed, 5*10**6 + sp); clat, clon = float(np.arcsin(rs.uniform(-.6, .6))), float(rs.uniform(0, 6.283))
-        r = _rng(seed, 7*10**6 + int(d["id"])); u, th = np.sin(np.clip(clat+.22*r.normal(), -1.3, 1.3)), clon+.3*r.normal()
-        out.append(dict(base, cohort=sp, id=int(d["id"]), parent_id=d.get("parent_id"), species_id=sp, generation=int(d.get("generation", 0)),
+        r = _rng(seed, 7*10**6 + int(d["id"]))
+        if d.get("lat") is not None and d.get("lon") is not None: lat, lon, real = float(d["lat"]), float(d["lon"]), True   # simulated position
+        else:                                   # legacy reports without positions: species home-range herd placement
+            rs = _rng(seed, 5*10**6 + sp); clat, clon = float(np.arcsin(rs.uniform(-.6, .6))), float(rs.uniform(0, 6.283))
+            lat, lon, real = float(np.clip(clat+.22*r.normal(), -1.3, 1.3)), float(clon+.3*r.normal()), False
+        out.append(dict(base, cohort=sp, id=int(d["id"]), parent_id=d.get("parent_id"), parent2_id=d.get("parent2_id"), species_id=sp, real_pos=real, generation=int(d.get("generation", 0)),
                         age=float(d.get("age", 0.)), energy=float(d.get("energy", 0.)), traits={k: round(v, 3) for k, v in tr.items()},
-                        lat=float(np.arcsin(u)), lon=float(th), heading=float(r.uniform(0, 6.283)), phase=float(r.random()*6.283)))
+                        lat=lat, lon=lon, heading=float(r.uniform(0, 6.283)), phase=float(r.random()*6.283)))
     return out

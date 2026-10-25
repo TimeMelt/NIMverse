@@ -25,7 +25,7 @@ def main(argv=None):
     data = dict(title=f"NIM life · seed {J['seed']} · {h['name']}", planet=d, name=h["name"], ptype=h["ptype"], biomass=pl["biomass"], biosign=pl["biosign"],
                 climate=dict(T_K=pl["climate"]["T_K"], water=pl["climate"]["liquid_water_frac"], cls=pl["climate"]["climate_class"]),
                 tech=pl.get("tech", 0), culture=pl.get("culture", {}), cohorts=cohorts, creatures=cr, n_alive=(evo.get("n_alive") if inds else None), individual_mode=bool(inds),
-                evolution=dict(series=[dict(t=e["t_w"], n=e["n_alive"], m=e["trait_means"]) for e in evo.get("evolution_series", [])][::4], births=evo.get("total_births"), species_ever=evo.get("species_ever")) if inds else None, T_eff=J["host"].get("T_eff", 5800))
+                evolution=dict(series=[dict(t=e["t_w"], n=e["n_alive"], m=e["trait_means"]) for e in evo.get("evolution_series", [])][::4], births=evo.get("total_births"), species_ever=evo.get("species_ever"), species_alive=evo.get("n_species_alive"), sexual_births=evo.get("total_sexual_births")) if inds else None, T_eff=J["host"].get("T_eff", 5800))
     R = lambda p: open(os.path.join(HERE, p)).read(); html = R("viewer_src/life_template.html")
     for key, val in [("/*THREE*/", R("vendor/three.min.js")), ("/*ORBIT*/", R("vendor/OrbitControls.js")), ("/*DATA*/", json.dumps(data, separators=(",", ":"))),
                      ("/*SHADERS*/", R("viewer_src/shaders.js")), ("/*APP*/", R("viewer_src/life.js"))]:

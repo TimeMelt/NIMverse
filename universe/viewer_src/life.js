@@ -60,7 +60,8 @@ const tech=[]; if(D.tech>0){let x=99; const rnd=()=>{x=(x*16807)%2147483647; ret
   const l=spr(new THREE.Color(1,.8,.45),4,1); l.position.y=2.8; g.add(l); g.position.copy(p).multiplyScalar(1.004); g.quaternion.setFromUnitVectors(new V3(0,1,0),p); g.scale.setScalar(SC); scene.add(g); tech.push(g);}}
 // ---- time / animation ----
 let T=0, mode='orbit', sel=-1; const up=new V3(), tmp=new V3();
-function place(cr,t){const c=cr.c, a=cr.w*t, mean=.25*Math.sin(t*.3+c.wobble);
+function place(cr,t){const c=cr.c, a=c.real_pos?.025*Math.sin(cr.w*t*6+c.phase):cr.w*t,   // real positions: small local wander around the simulated lat/lon
+ mean=.25*Math.sin(t*.3+c.wobble);
  const p=cr.p0.clone().multiplyScalar(Math.cos(a)).add(cr.t0.clone().multiplyScalar(Math.sin(a))); const fw=cr.t0.clone().multiplyScalar(Math.cos(a)).sub(cr.p0.clone().multiplyScalar(Math.sin(a)));
  fw.applyAxisAngle(p,mean).normalize(); let h=cr.alt; const ph=t*c.speed*6+c.phase;
  if(c.plan==='crawler'&&c.traits.mobility>.5) h+=.004*Math.max(0,Math.sin(ph*.5)); if(c.plan==='flyer') h+=.01*Math.sin(t*.7+c.phase); if(c.plan==='floater') h+=.004*Math.sin(t*1.3+c.phase);
@@ -75,7 +76,7 @@ const plans={}; C.forEach(c=>plans[c.plan]=(plans[c.plan]||0)+1); const f=(x,n=2
 info.innerHTML=`<b>${D.name}</b> · ${D.ptype} world<br>biomass ${f(D.biomass,3)} · ${D.individual_mode?`<b>${D.n_alive}</b> living individuals · ${D.cohorts.length} species · showing <b>${C.length}</b> real ids`:`${D.cohorts.length} cohorts · <b>${C.length}</b> creatures`}<br>`+Object.entries(plans).map(([k,v])=>`${v} ${k}s`).join(' · ')+
  `<br>T ${f(D.climate.T_K,0)} K (${D.climate.cls}) · water ${f(D.climate.water*100,0)}%<br>O₂ ${f(D.biosign.o2,3)} · pigments ${f(D.biosign.pigments,2)} · tech ${f(D.tech,2)}<br><span style="color:#789">${D.title}</span>`;
 function showSel(k){sel=k; if(k<0){selE.style.display='none';return;} const c=C[k]; selE.style.display='block';
- selE.innerHTML=`${c.id!==undefined?`<b>individual #${c.id}</b> · species ${c.species_id} · gen ${c.generation}<br>parent ${c.parent_id??'founder'} · age ${f(c.age,0)} yr · energy ${f(c.energy)}<br>`:`<b>creature #${k}</b> · cohort ${c.cohort}<br>`}plan <b>${c.plan}</b> · size ${f(c.size)} · limbs ${c.limbs} · ${c.shell?'shelled':'soft-bodied'}${c.glow>.05?' · bioluminescent':''}<br>speed ${f(c.speed)}<hr style="border-color:#234">`+Object.entries(c.traits).map(([a,b])=>`${a} <b>${f(b,3)}</b>`).join('<br>');}
+ selE.innerHTML=`${c.id!==undefined?`<b>individual #${c.id}</b> · species ${c.species_id} · gen ${c.generation}<br>parent ${c.parent_id??'founder'}${c.parent2_id!=null?` × ${c.parent2_id} (sexual)`:''} · age ${f(c.age,0)} yr · energy ${f(c.energy)}<br>`:`<b>creature #${k}</b> · cohort ${c.cohort}<br>`}plan <b>${c.plan}</b> · size ${f(c.size)} · limbs ${c.limbs} · ${c.shell?'shelled':'soft-bodied'}${c.glow>.05?' · bioluminescent':''}<br>speed ${f(c.speed)}<hr style="border-color:#234">`+Object.entries(c.traits).map(([a,b])=>`${a} <b>${f(b,3)}</b>`).join('<br>');}
 const ray=new THREE.Raycaster(), mv=new THREE.Vector2();
 renderer.domElement.addEventListener('click',e=>{mv.set(e.clientX/W()*2-1,-e.clientY/H()*2+1); ray.setFromCamera(mv,camera); const h=ray.intersectObjects(pickables,false); if(h.length) view('creature',h[0].object.userData.k); else showSel(-1);});
 addEventListener('keydown',e=>{if(e.key==='1')view('orbit'); if(e.key==='2')view('surface',Math.max(sel,0)); if(e.key==='3')view('creature',(sel+1)%C.length);});

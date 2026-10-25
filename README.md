@@ -66,6 +66,15 @@ New LIFE_SPACE knobs: `evolution_rate`, `pop_cap`, `sel_strength`, `speciation_d
 Report per living planet: `individuals` (all living), `evolution.{evolution_series, deceased_sample (reservoir 200), founding_traits, final_traits, total_births, species_ever}`.
 `viewer_life` builds one mesh per saved individual (≤64 shown, real ids, click shows id/parent/species/generation); the synthesised-herd path is only used for old cohort reports.
 
+**Rough-edge fixes (sexual repro, positions, speciation, drift, impacts).**
+- *Positions*: every individual has a unit vector on the sphere (`lat`/`lon` in the report), brownian-walked each year with step ∝ mobility; births land near the parent. `viewer_life`/`life.js` place meshes at the simulated lat/lon (small local wander only); herd placement is kept only for old reports.
+- *Sexual reproduction*: with probability `sex_rate` (default .3) a mate is picked (best of 8 random candidates: same species, nearest); child traits = per-trait random blend + mutation; `parent2_id` recorded.
+- *Speciation*: children inherit the parent's species; every 200 yr the living set is re-clustered (average linkage on trait distance + 0.5 × great-circle distance/π, cut at 0.75 × `speciation_dist`). Clusters keep the plurality previous id; a new id is minted only for a daughter cluster with ≥10% of the living, and ids that drift together merge. Poles are harsher than the equator (`LAT_STRESS`), so local adaptation can split species. Reported as `n_species_alive` / `n_species_ever`.
+- *Mobility*: foraging bonus saturates (`mob/(mob+0.3)`) and only pays in crowded cells; the metabolic cost is convex in mobility, so mobility no longer runs away to ~0.95.
+- *Nonstationarity*: `climate_drift` adds organism-felt stress cycles (8.3 and 21 kyr) plus rare ±flips, and a ~13 kyr productivity cycle, so selection on hardiness keeps moving.
+- *Impacts*: kill chance scales with local crowding and is halved by hardiness; shelter draws (10% + 30% × ocean cover) survive outright, and a floor of max(3, `impact_refuge` × n) survivors holds unless the climate is already lethal. Shocks are logged in `evolution.impact_log`.
+New knobs: `sex_rate`, `climate_drift`, `impact_refuge`.
+
     PYTHONPATH=/workspace/NIM python -m universe.run_life --seed 4 --years 40000 --dt 20 --out results/life_demo_seed4.json
     PYTHONPATH=/workspace/NIM python -m universe.plot_evolution        # -> results/life_evolution_traits_seed4.png
     PYTHONPATH=/workspace/NIM python -m universe.viewer_life --seed 4 --life results/life_demo_seed4.json && python -m universe.viewer_life_shots --seed 4 --tour 96

@@ -15,10 +15,11 @@ def main(argv=None):
     for tr, c in zip(TRAITS, ["#4fc3f7", "#ffb74d", "#81c784", "#e57373"]):
         m = np.array([s["trait_means"][tr] if s["n_alive"] else np.nan for s in S], float); sd = np.array([s["trait_stds"][tr] if s["n_alive"] else np.nan for s in S], float)
         ax[0].plot(t, m, color=c, lw=1.8, label=tr); ax[0].fill_between(t, m-sd, m+sd, color=c, alpha=.18)
+    if "env_offset" in S[-1]: ax[0].plot(t, [s.get("env_offset", 0.) + .5 for s in S], color="#9e9e9e", lw=1, ls="--", label="climate drift (+0.5)")
     ax[0].set_title(f"{pl['habitat']['name']}: trait means ± sd (literal individuals)", color="w"); ax[0].set_xlabel("world time [kyr]", color="#bcd"); ax[0].legend(facecolor="#111a26", labelcolor="w", fontsize=8)
     ax[1].plot(t, [s["n_alive"] for s in S], color="#ffd040", label="living individuals"); ax[1].plot(t, [10*s["n_species"] for s in S], color="#ce93d8", label="species ×10")
     ax[1].plot(t, [s["generations_max"]/10 for s in S], color="#80cbc4", label="max generation ÷10")
-    ax[1].set_title(f"population · births {pl['evolution']['total_births']} · species ever {pl['evolution']['species_ever']}", color="w"); ax[1].set_xlabel("world time [kyr]", color="#bcd"); ax[1].legend(facecolor="#111a26", labelcolor="w", fontsize=8)
+    ax[1].set_title(f"population · births {pl['evolution']['total_births']} · species ever {pl['evolution']['species_ever']} · alive {pl['evolution'].get('n_species_alive', '?')}", color="w"); ax[1].set_xlabel("world time [kyr]", color="#bcd"); ax[1].legend(facecolor="#111a26", labelcolor="w", fontsize=8)
     out = a.out or f"{RES}/life_evolution_traits_seed{J['seed']}.png"; fig.tight_layout(); fig.savefig(out, dpi=110, facecolor=fig.get_facecolor()); print("wrote", out); return out
 
 if __name__ == "__main__": main()

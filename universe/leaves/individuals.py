@@ -1,8 +1,14 @@
-"""Individuals leaf: literal organisms with ids, parent links, energy, heritable traits, and evolution.
+"""Individuals leaf: literal organisms with ids, parent links, positions, energy, heritable traits, and evolution.
 Population is stored struct-of-arrays (numpy, vectorised) but every row is one organism with a unique id.
-Per step: competition for niche food -> metabolism -> death (base + climate stress vs hardiness + starvation)
--> reproduction (Poisson, energy-paid, rate x fitness) with inherited + mutated traits (asexual) -> soft-cap cull of weakest.
-Speciation-lite: child gets a new species_id when its traits drift > speciation_dist from its species' founder traits."""
+Per step: random walk on the unit sphere (step ~ mobility) -> local density (equal-area grid) -> competition for niche food
+(diminishing-returns mobility bonus that only pays where crowded) -> metabolism (mobility cost convex) -> death (base + climate
+stress vs hardiness, incl. slow internal climate drift + rare flips, + starvation) -> reproduction (Poisson, energy-paid; with
+prob sex_rate a nearby same-species mate is chosen and traits are blended) -> soft-cap cull of weakest.
+Speciation: children inherit the parent's species; every SPECIES_EVERY yr the living set is re-clustered (average linkage on
+trait + geographic distance, threshold .75 x speciation_dist, tiny clusters merged into the nearest big one); cluster labels are
+matched to previous species ids by majority so ids persist and species merge when they drift back together.
+Impacts: per-individual kill ~ shock x (1-hardiness/2) x local crowding, refugia (shelter draw grows with ocean cover), and a
+survivor floor max(3, impact_refuge x pre-impact n) unless chronic climate is already lethal."""
 import numpy as np
 from dataclasses import dataclass, field
 from .packets import CreaturePacket, as_bus
@@ -10,25 +16,55 @@ from .params import TRAITS, LIFE_SPACE
 
 LO = np.array([LIFE_SPACE[t][0] for t in TRAITS]); HI = np.array([LIFE_SPACE[t][1] for t in TRAITS]); SPAN = HI - LO
 H = TRAITS.index("hardiness"); MET = TRAITS.index("metabolism_eff"); MOB = TRAITS.index("mobility"); REP = TRAITS.index("reproduction_rate")
-E_MAX = 12.         # energy store cap (~24 yr of basal burn: buffers famine steps)
+E_MAX = 12.           # energy store cap (~24 yr of basal burn: buffers famine steps)
+SPECIES_EVERY = 200.  # yr between re-clusterings of the living set
+NEW_SPECIES_FRAC = .1  # a split founds a new species_id only if the daughter cluster holds >= 10% of the living
+MIN_SPECIES = 5       # clusters smaller than this are merged into the nearest larger one
+GEO_W = .5            # weight of great-circle distance (rad/pi) in the speciation metric (allopatry)
+LAT_STRESS = .3       # poles harsher than equator (mean zero over the sphere): local adaptation -> geographic species
+NZ, NL = 6, 12        # equal-area density grid (z bands x lon sectors)
+KEYS = ("id", "parent", "parent2", "birth", "energy", "traits", "gen", "species", "pos")
+
+def need_of(tr):
+    m = tr[:, MOB]; return (1 - .5*tr[:, MET])*(1 + .6*tr[:, H])*(1 + .2*m + .45*m*m)   # mobility cost is convex
+
+def _rand_pos(rng, n):
+    v = rng.normal(size=(n, 3)); return v/np.linalg.norm(v, axis=1, keepdims=True)
+
+def latlon(pos): return np.arcsin(np.clip(pos[:, 1], -1, 1)), np.arctan2(pos[:, 2], pos[:, 0])   # matches life.js (y up)
+
+def _jitter(pos, step, rng):
+    p = pos + step[:, None]*rng.normal(size=pos.shape); return p/np.linalg.norm(p, axis=1, keepdims=True)
+
+def local_density(pos):
+    """Relative density (1 = uniform) of each individual's equal-area cell."""
+    n = len(pos)
+    if not n: return np.zeros(0)
+    zb = np.clip(((pos[:, 1] + 1)/2*NZ).astype(int), 0, NZ-1); lb = ((np.arctan2(pos[:, 2], pos[:, 0]) + np.pi)/(2*np.pi)*NL).astype(int) % NL
+    c = zb*NL + lb; cnt = np.bincount(c, minlength=NZ*NL); return cnt[c]/(n/(NZ*NL))
 
 @dataclass
 class Population:
     id: np.ndarray = field(default_factory=lambda: np.zeros(0, int)); parent: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
+    parent2: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
     birth: np.ndarray = field(default_factory=lambda: np.zeros(0)); energy: np.ndarray = field(default_factory=lambda: np.zeros(0))
     traits: np.ndarray = field(default_factory=lambda: np.zeros((0, len(TRAITS)))); gen: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
-    species: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
-    next_id: int = 0; next_species: int = 0; founders: dict = field(default_factory=dict)   # species_id -> founder traits (normalised)
-    t: float = 0.; n_births: int = 0; n_deaths: int = 0; graveyard: list = field(default_factory=list); n_dead_seen: int = 0
-    series: list = field(default_factory=list); last_series_t: float = -1e18
+    species: np.ndarray = field(default_factory=lambda: np.zeros(0, int)); pos: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
+    next_id: int = 0; next_species: int = 0; last_cluster_t: float = -1e18
+    drift_phase: float = 0.; flip: float = 0.; env_offset: float = 0.
+    t: float = 0.; n_births: int = 0; n_deaths: int = 0; n_sexual: int = 0; graveyard: list = field(default_factory=list); n_dead_seen: int = 0
+    series: list = field(default_factory=list); last_series_t: float = -1e18; impact_log: list = field(default_factory=list)
     def __len__(self): return len(self.id)
     def take(self, m):
-        for k in ("id", "parent", "birth", "energy", "traits", "gen", "species"): setattr(self, k, getattr(self, k)[m])
+        for k in KEYS: setattr(self, k, getattr(self, k)[m])
     def append(self, **kw):
         for k, v in kw.items(): setattr(self, k, np.concatenate([getattr(self, k), v]))
     def record(self, i, t_death=None):
-        d = dict(id=int(self.id[i]), parent_id=(int(self.parent[i]) if self.parent[i] >= 0 else None), birth_t_w=float(self.birth[i]),
+        la, lo = latlon(self.pos[i:i+1])
+        d = dict(id=int(self.id[i]), parent_id=(int(self.parent[i]) if self.parent[i] >= 0 else None),
+                 parent2_id=(int(self.parent2[i]) if self.parent2[i] >= 0 else None), birth_t_w=float(self.birth[i]),
                  age=float(self.t - self.birth[i]), energy=round(float(self.energy[i]), 4), generation=int(self.gen[i]), species_id=int(self.species[i]),
+                 lat=round(float(la[0]), 5), lon=round(float(lo[0]), 5),
                  traits={t: round(float(v), 4) for t, v in zip(TRAITS, self.traits[i])}, alive=t_death is None)
         if t_death is not None: d["death_t_w"] = float(t_death)
         return d
@@ -36,24 +72,29 @@ class Population:
         idx = np.argsort(self.id); idx = idx if k is None or len(idx) <= k else idx[np.linspace(0, len(idx)-1, k).astype(int)]
         return [self.record(i) for i in idx]
     def stats(self):
-        n = len(self); tr = self.traits
+        n = len(self); tr = self.traits; ns = int(len(np.unique(self.species))) if n else 0
         return dict(t_w=float(self.t), n_alive=int(n), trait_means={t: float(tr[:, j].mean()) if n else None for j, t in enumerate(TRAITS)},
                     trait_stds={t: float(tr[:, j].std()) if n else None for j, t in enumerate(TRAITS)},
                     generations_max=int(self.gen.max()) if n else 0, generations_mean=float(self.gen.mean()) if n else 0.,
-                    n_species=int(len(np.unique(self.species))) if n else 0, n_births=int(self.n_births), n_deaths=int(self.n_deaths))
+                    n_species=ns, n_species_alive=ns, n_species_ever=int(self.next_species), env_offset=float(self.env_offset),
+                    n_births=int(self.n_births), n_deaths=int(self.n_deaths), n_sexual=int(self.n_sexual))
     def summary(self, k=None):
         return dict(individuals=self.individuals(k), n_alive=len(self), deceased_sample=self.graveyard, evolution_series=self.series,
-                    total_births=int(self.n_births), total_deaths=int(self.n_deaths), species_ever=int(self.next_species))
+                    total_births=int(self.n_births), total_deaths=int(self.n_deaths), total_sexual_births=int(self.n_sexual),
+                    species_ever=int(self.next_species), n_species_ever=int(self.next_species),
+                    n_species_alive=int(len(np.unique(self.species))) if len(self) else 0, impact_log=self.impact_log)
 
 def _new_ids(pop, k): ids = np.arange(pop.next_id, pop.next_id + k); pop.next_id += k; return ids
 
 def found(LP, rng, n=40, t_w=0., traits=None):
-    """Founding population: n individuals around LP trait means (or explicit `traits` dict), spread mutation_sd."""
+    """Founding population: n individuals around LP trait means (or explicit `traits` dict), spread mutation_sd, near one site."""
     P = as_bus(LP); pop = Population(); mu = np.array([(traits or {}).get(t, P[t]) for t in TRAITS])
     tr = np.clip(mu + P["mutation_sd"]*SPAN*rng.normal(size=(n, len(TRAITS))), LO, HI)
-    pop.append(id=_new_ids(pop, n), parent=-np.ones(n, int), birth=np.full(n, float(t_w)), energy=np.ones(n), traits=tr,
-               gen=np.zeros(n, int), species=np.zeros(n, int))
-    pop.next_species = 1; pop.founders[0] = (mu - LO)/SPAN; pop.t = float(t_w); pop.series.append(pop.stats()); pop.last_series_t = pop.t
+    pos = _jitter(np.repeat(_rand_pos(rng, 1), n, 0), np.full(n, .15), rng)
+    pop.append(id=_new_ids(pop, n), parent=-np.ones(n, int), parent2=-np.ones(n, int), birth=np.full(n, float(t_w)), energy=np.ones(n), traits=tr,
+               gen=np.zeros(n, int), species=np.zeros(n, int), pos=pos)
+    pop.next_species = 1; pop.t = float(t_w); pop.last_cluster_t = pop.t; pop.drift_phase = float(rng.uniform(0, 2*np.pi))
+    pop.series.append(pop.stats()); pop.last_series_t = pop.t
     return pop
 
 def climate_stress(climate):
@@ -62,6 +103,18 @@ def climate_stress(climate):
 
 def shock_kill(climate):
     st = climate.stressors or {}; return float(1 - (1 - min(st.get("impact_kill", 0.), 1.))*(1 - min(st.get("uv_kill", 0.), 1.)))
+
+def env_drift(pop, P, rng, dt):
+    """Multi-millennial nonstationarity felt by organisms: two incommensurate cycles (8.3 & 21 kyr) + rare telegraph flips
+    (~1 per 12 kyr, +-1). Returns stress offset (scaled by climate_drift); also stored on pop.env_offset."""
+    a = P["climate_drift"]
+    if rng.random() < 1 - np.exp(-dt/12000.): pop.flip = -pop.flip if pop.flip else float(rng.choice([-1., 1.]))
+    t = pop.t; ph = pop.drift_phase
+    pop.env_offset = float(a*(.22*np.sin(2*np.pi*t/8300. + ph) + .12*np.sin(2*np.pi*t/21000. + 2*ph) + .12*pop.flip)); return pop.env_offset
+
+def food_mult(pop, P):
+    """Productivity cycle (~13 kyr) anti-correlated-ish with stress drift: shifts the metabolism/reproduction optimum."""
+    return float(1 + .35*P["climate_drift"]*np.sin(2*np.pi*pop.t/13000. + 1.3*pop.drift_phase))
 
 def _bury(pop, dead, rng, grave_k, t):
     """Remove `dead` rows, keeping a reservoir sample of grave_k deceased records (compact lineage history)."""
@@ -73,51 +126,105 @@ def _bury(pop, dead, rng, grave_k, t):
             else: pop.graveyard[j] = rec
     pop.take(~dead)
 
+def impact_deaths(pop, f, climate, P, rng):
+    """Boolean death mask for a one-off shock of strength f (0..1). Crowded cells die more (density-dependent), hardiness halves
+    the chance, a shelter draw (10% + 30% x ocean cover) survives outright, and a survivor floor max(3, impact_refuge x n) is
+    kept (hardiest victims spared) unless chronic stress is already lethal for everyone."""
+    n = len(pop)
+    if not n or f <= 0: return np.zeros(n, bool)
+    dens = local_density(pop.pos); crowd = .6 + .4*np.clip(dens, 0, 3)/max(1., float(np.clip(dens, 0, 3).max()))
+    p = np.clip(f*(1 - .5*pop.traits[:, H])*crowd, 0, 1)
+    shelter = rng.random(n) < .1 + .3*float(climate.liquid_water_frac)
+    dead = (rng.random(n) < p) & ~shelter
+    lethal = climate_stress(climate) - pop.traits[:, H].max() > 1.5
+    floor = 0 if lethal else min(n, max(3, int(np.ceil(P["impact_refuge"]*n))))
+    short = floor - int((~dead).sum())
+    if short > 0:
+        v = np.flatnonzero(dead); spare = v[np.argsort(-(pop.traits[v, H] + .2*rng.random(len(v))))[:short]]; dead[spare] = False
+    return dead
+
 def step(pop, niche, climate, LP, rng, dt_w_yr=1., t_w=None, series_every=None, grave_k=200, h_max=1.):
     """Advance every individual by dt world-years (internal substeps <= h_max yr so demography is dt-stable).
     Returns (pop, CreaturePacket) summed over substeps. Mutates `pop` in place."""
     P = as_bus(LP); k = max(1, int(np.ceil(dt_w_yr/h_max - 1e-9))); h = float(dt_w_yr)/k; t1 = float(t_w if t_w is not None else pop.t + dt_w_yr)
     B = D = 0; f = shock_kill(climate)
-    if f > 0 and len(pop):                                                 # one-off shock: hardiness halves the kill chance
-        dead = rng.random(len(pop)) < f*(1 - .5*pop.traits[:, H]); D += int(dead.sum()); _bury(pop, dead, rng, grave_k, pop.t); pop.n_deaths += int(dead.sum())
+    if f > 1e-3 and len(pop):
+        n0 = len(pop); dead = impact_deaths(pop, f, climate, P, rng); D += int(dead.sum()); _bury(pop, dead, rng, grave_k, pop.t); pop.n_deaths += int(dead.sum())
+        pop.impact_log.append(dict(t_w=float(pop.t), kill=round(f, 4), n_before=n0, n_after=len(pop)))
     for i in range(k):
         b, d = _substep(pop, niche, climate, P, rng, h, t1 - (k-1-i)*h, grave_k); B += b; D += d
+    if pop.t - pop.last_cluster_t >= SPECIES_EVERY - 1e-9: recluster(pop, P); pop.last_cluster_t = pop.t
     if series_every and pop.t - pop.last_series_t >= series_every - 1e-9: pop.series.append(pop.stats()); pop.last_series_t = pop.t
     s = pop.stats(); means = {t: v for t, v in s["trait_means"].items() if v is not None}; means["cohorts"] = float(s["n_species"])
     cap = int(P["pop_cap"])
     return pop, CreaturePacket(float(B), float(D), float(len(pop)), means, float(pop.energy.sum()/max(cap, 1)) if len(pop) else 0.)
 
+def recluster(pop, P):
+    """Assign species_id = average-linkage clusters of the living set (trait + GEO_W x geo distance < .75 x speciation_dist).
+    Small clusters join the nearest big one. Each cluster keeps the majority previous id (largest cluster wins ties);
+    clusters that lose the vote get a new id (speciation) if they hold >= NEW_SPECIES_FRAC of the living; ids absent afterwards are extinct or merged."""
+    n = len(pop)
+    if n < 2: return
+    from scipy.cluster.hierarchy import linkage, fcluster
+    from scipy.spatial.distance import squareform
+    x = (pop.traits - LO)/SPAN; Dt = np.sqrt(((x[:, None] - x[None])**2).sum(-1))
+    Dg = np.arccos(np.clip(pop.pos @ pop.pos.T, -1, 1))/np.pi; Dm = Dt + GEO_W*Dg; np.fill_diagonal(Dm, 0)
+    lab = fcluster(linkage(squareform(Dm, checks=False), "average"), .75*P["speciation_dist"], "distance") - 1; sz = np.bincount(lab)
+    big = np.flatnonzero(sz >= MIN_SPECIES)
+    if not len(big): big = np.array([int(np.argmax(sz))])
+    small = ~np.isin(lab, big)
+    if small.any():
+        cols = np.isin(lab, big); j = np.argmin(np.where(cols[None, :], Dm[small], np.inf), axis=1); lab[small] = lab[j]
+    new = pop.species.copy(); used = set()
+    for c in sorted(np.unique(lab), key=lambda c: -int((lab == c).sum())):
+        m = lab == c; ids, cnt = np.unique(pop.species[m], return_counts=True); o = np.argsort(-cnt); pick = None
+        for q in o:
+            if int(ids[q]) not in used: pick = int(ids[q]); break
+        if pick is None and m.sum() < NEW_SPECIES_FRAC*n: pick = int(ids[o[0]])   # small daughter cluster: no new id (hysteresis)
+        if pick is None: pick = pop.next_species; pop.next_species += 1
+        used.add(pick); new[m] = pick
+    pop.species = new
+
 def _substep(pop, niche, climate, P, rng, dt, t, grave_k):
     n = len(pop); cap = int(P["pop_cap"]); sel = P["sel_strength"]; pop.t = float(t); births = deaths = 0
+    off = env_drift(pop, P, rng, dt)
     if n:
         tr = pop.traits; hard, met, mob, rep = tr[:, H], tr[:, MET], tr[:, MOB], tr[:, REP]
-        need = (1 - .5*met)*(1 + .6*hard)*(1 + .4*mob)                  # basal need/yr: hardiness & mobility are costly
-        food = max(0., niche.resources)*cap*dt                             # niche food shared by up to pop_cap organisms
-        w = np.sqrt(need)*(1 + .4*mob)*(1 + .3*rng.random(n))                       # competitive weight (mobility forages better)
+        pop.pos = _jitter(pop.pos, .04*(.05 + mob)*np.sqrt(dt), rng)    # brownian walk on the sphere, step ~ mobility
+        dens = local_density(pop.pos)
+        need = need_of(tr)
+        food = max(0., niche.resources)*cap*dt*food_mult(pop, P)           # niche food shared by up to pop_cap organisms
+        bonus = 2.2*mob/(mob + .3)*np.clip(dens, 0, 2)/2                    # saturating, only pays where crowded
+        w = np.sqrt(need/(1 + .2*mob + .45*mob*mob))*(1 + bonus)*(1 + .3*rng.random(n))
         got = np.minimum(food*w/w.sum(), 1.5*need*dt) if food > 0 else np.zeros(n)
         burn = .5 if food > 0 else .5*(.4 - .3*hard)                       # famine -> dormancy (hardy forms encyst deeper)
-        pop.energy = np.clip(pop.energy + got - burn*need*dt, 0., E_MAX)   # energy store never negative
-        stress = climate_stress(climate); starving = pop.energy <= 0
-        rate = P["eco_death"]*.5 + sel*.2*np.maximum(0., stress - hard) + (.25 if food > 0 else .03)*starving   # hazard per world-yr (dormant in famine)
+        pop.energy = np.clip(pop.energy + got - burn*need*dt, 0., E_MAX)
+        stress = climate_stress(climate) + off + LAT_STRESS*(np.abs(pop.pos[:, 1]) - .5); starving = pop.energy <= 0
+        rate = P["eco_death"]*.5 + sel*.2*np.maximum(0., stress - hard) + (.25 if food > 0 else .03)*starving
         dead = rng.random(n) < 1 - np.exp(-rate*dt); deaths = int(dead.sum())
         if deaths: _bury(pop, dead, rng, grave_k, pop.t)
         n = len(pop)
     if n:
-        tr = pop.traits; need = (1 - .5*tr[:, MET])*(1 + .6*tr[:, H])*(1 + .4*tr[:, MOB])
-        fit = np.clip(pop.energy/need, 0., 2.)                             # energy surplus -> fecundity
+        tr = pop.traits; need = need_of(tr)
+        fit = np.clip(pop.energy/need, 0., 2.)
         lam = tr[:, REP]*dt*fit*max(0., 1 - n/(1.5*cap)); kids = rng.poisson(lam)
         cost = .5*need; kids = np.minimum(kids, np.floor(np.maximum(pop.energy, 0)/cost).astype(int)); births = int(kids.sum())
         if births:
             par = np.repeat(np.arange(n), kids); pop.energy = pop.energy - kids*cost
+            base = tr[par].copy(); par2 = -np.ones(births, int); g = pop.gen[par].copy()
+            sex = np.flatnonzero(rng.random(births) < P["sex_rate"]) if n > 1 else np.zeros(0, int)
+            if len(sex):                                                   # mate: best of 8 random candidates (same species, nearby)
+                cand = rng.integers(n, size=(len(sex), 8)); p1 = par[sex]
+                score = np.arccos(np.clip((pop.pos[cand]*pop.pos[p1][:, None]).sum(-1), -1, 1)) + 10.*(pop.species[cand] != pop.species[p1][:, None]) + 100.*(cand == p1[:, None])
+                m2 = cand[np.arange(len(sex)), np.argmin(score, 1)]; ok = m2 != p1; sex, m2 = sex[ok], m2[ok]
+                wb = rng.random((len(sex), len(TRAITS))); base[sex] = wb*tr[par[sex]] + (1 - wb)*tr[m2]; par2[sex] = pop.id[m2]; g[sex] = np.maximum(g[sex], pop.gen[m2]); pop.n_sexual += len(sex)
             sd = P["mutation_sd"]*P["evolution_rate"]*SPAN*np.where(rng.random((births, 1)) < .02, 5., 1.)   # rare big jumps
-            ct = np.clip(tr[par] + sd*rng.normal(size=(births, len(TRAITS))), LO, HI); sp = pop.species[par].copy()
-            dist = np.linalg.norm((ct - LO)/SPAN - np.array([pop.founders[s] for s in sp]), axis=1)
-            for i in np.flatnonzero(dist > P["speciation_dist"]):          # lineage split -> new species founded by this child
-                sp[i] = pop.next_species; pop.founders[pop.next_species] = (ct[i] - LO)/SPAN; pop.next_species += 1
-            pop.append(id=_new_ids(pop, births), parent=pop.id[par], birth=np.full(births, pop.t), energy=np.full(births, .5)*cost[par],
-                       traits=ct, gen=pop.gen[par] + 1, species=sp)
+            ct = np.clip(base + sd*rng.normal(size=(births, len(TRAITS))), LO, HI)
+            pop.append(id=_new_ids(pop, births), parent=pop.id[par], parent2=par2, birth=np.full(births, pop.t), energy=np.full(births, .5)*cost[par],
+                       traits=ct, gen=g + 1,
+                       species=pop.species[par].copy(), pos=_jitter(pop.pos[par], np.full(births, .02), rng))
         if len(pop) > cap:                                                 # soft cap: cull weakest (lowest energy/need)
-            tr = pop.traits; need = (1 - .5*tr[:, MET])*(1 + .6*tr[:, H])*(1 + .4*tr[:, MOB])
+            need = need_of(pop.traits)
             keep = np.argsort(-(pop.energy/need + .1*rng.random(len(pop))))[:cap]; m = np.zeros(len(pop), bool); m[keep] = True
             deaths += int((~m).sum()); pop.take(np.sort(np.flatnonzero(m)))
     pop.n_births += births; pop.n_deaths += deaths
