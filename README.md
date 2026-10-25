@@ -42,3 +42,13 @@ Run:
 
 Still stubs: no spectra or radiative transfer, no stellar evolution track (dM is wind-only), no GR dynamics, cosmology isn't coupled to the sim, and culture is a single logistic marker.
 Backup from before the leaves: `/workspace/backups/universe_pre_leaves_20261025_163027{.tar.gz,/}`.
+
+## Life surface viewer (see the organisms, not just charts)
+```
+PYTHONPATH=/workspace/NIM python -m universe.viewer_life --seed 4        # -> /workspace/nim_universe/out/viewer_life_seed4.html
+PYTHONPATH=/workspace/NIM python -m universe.viewer_life_shots --seed 4 [--tour 84]   # PNGs life_surface_seed4_*.png (+ life_creatures_seed4.mp4)
+```
+Living planet uses the same FS_ROCKY/FS_CLOUD/FS_ATM shaders as the gallery closeups; creatures are low-poly meshes from `universe/leaves/creature_look.py`:
+mobility -> body plan (swimmer/crawler/flyer/floater) + speed + limb count; metabolism_eff -> size & glow strength; reproduction_rate -> segments, smaller bodies;
+hardiness -> shell + spines; biosign pigments -> hue/saturation + bioluminescence; biosign tech -> lit structures. Final cohorts are not stored in the life report,
+so 8 cohorts are synthesised around the recorded final trait means (spread = mutation_sd), deterministic per seed. Click a creature for its traits.
