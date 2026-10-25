@@ -15,7 +15,7 @@ def host_weather(S, distance_pc=None, M_override=None):
     return HostWeather.from_star(M, L, float(temp(M)), d)
 
 def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
-                culture=True, catalog=None, emit_every=1, culture_min_age=1000.):
+                culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None):
     P = as_bus(LP); hw = copy.deepcopy(hw); chem = chemistry.init_chem(h); gate = chemistry.planted_gate(0.) if plant else None
     bio = biosphere.Biosphere(); coh = []; series = []; clim = None; pkt = None; flux = None
     hist = world.ClimateHistory(); cu = culture_mod.Culture(); kill_tot = 0.; n_imp = 0; impact_loss = 0.
@@ -39,6 +39,10 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
             if k % emit_every == 0: catalog.emit(t, h.name, flux)
             catalog.poll(t)
         series.append(bio.total())
+        if record is not None:
+            record(dict(planet=h.name, t_w=float(t), T=float(clim.T_K), water=float(clim.liquid_water_frac), biomass=float(bio.total()),
+                        alive=bool(bio.alive), o2=float(flux.o2), ch4=float(flux.ch4), pigments=float(flux.pigments), tech=float(flux.tech),
+                        n_org=float(pkt.n) if (coh and pkt is not None) else 0., impacts=int(n_imp)))
     return dict(habitat=h.to_dict(), climate=clim.to_dict(), climate_history=hist.summary(), chem=chem.to_dict(), gate=gate.to_dict(),
                 biosphere=bio.to_dict(), biomass=float(bio.total()), biosign=flux.to_dict(), host=hw.summary(),
                 impacts=dict(events=int(n_imp), biomass_lost=float(impact_loss), rate_per_kyr=float(h.impact_flux*P["impact_scale"])),
@@ -47,13 +51,13 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
                 score=dict(eco_stability=ScoreBus.eco_stability(series), planted_life=ScoreBus.planted_life(bio.alive)))
 
 def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, culture=True, distance_pc=None, observers=None,
-              emit_every=None, M_override=None):
+              emit_every=None, M_override=None, record=None):
     P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override)
     cat = ObserverCatalog(observers or [Observer("obs0", hw.distance_pc)])
     ee = emit_every or max(1, int(years/dt)//400)
     habs = habitats_from_system(S, seed, P); rep = []
     for h in habs:
-        if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee))
+        if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee, record=record))
         else: rep.append(dict(habitat=h.to_dict(), skipped="not rocky near-HZ"))
     cat.poll(years)
     clims = [world.step(h, hw, P) for h in habs]
