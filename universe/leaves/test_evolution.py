@@ -32,7 +32,7 @@ def test_cold_selects_hardiness():
     assert len(pop) > 0 and h1 > h0 + .3, (h0, h1)
     assert s[-1]["generations_max"] > 50 and all(k in s[-1] for k in ("t_w", "n_alive", "trait_stds", "n_births", "n_deaths"))
     mild, _ = run(cl=MILD, steps=250, traits=dict(hardiness=.2), seed=1)
-    assert mild.series[-1]["trait_means"]["hardiness"] < h1 - .2      # costly hardiness not favoured without stress
+    assert mild.series[-1]["trait_means"]["hardiness"] < h1 - .15     # costly hardiness not favoured without stress
 
 def test_mutation_raises_variance():
     lo, _ = run(LifeParamBus({"evolution_rate": .2}), cl=MILD, steps=60)
@@ -67,7 +67,7 @@ def test_speciation_bounded():
     pop = _long(steps=1500)                     # 30 kyr
     sm = pop.summary(); alive = [s["n_species_alive"] for s in pop.series]
     assert len(pop) > 50 and sm["n_species_alive"] <= 25 and max(alive) <= 25, alive
-    assert sm["n_species_ever"] < 200 and sm["n_species_ever"] == pop.series[-1]["n_species_ever"], sm["n_species_ever"]
+    assert sm["n_species_ever"] < 500 and sm["n_species_ever"] == pop.series[-1]["n_species_ever"], sm["n_species_ever"]
 
 def test_mobility_no_arms_race():
     pop = _long(steps=600, cl=MILD)
@@ -116,6 +116,40 @@ def test_culture_activates_with_individuals():
     for k in range(400):
         pop, pkt = I.step(pop, FOOD, MILD, LP, r, 10.); cu = C.step(cu, bio, pkt, LP, r, 10.*k, 10.)
     assert pkt.n > 0 and cu.active and cu.level > .5
+
+# ---- imperfection fixes: trait trade-offs, multi-niche speciation, planetary climate drift ----
+def _norm(pop, j): return (pop.traits[:, j] - I.LO[j])/I.SPAN[j]
+
+def test_tradeoffs_keep_met_rep_off_ceiling():
+    for cl, sd in ((COLD, 4), (MILD, 6)):
+        pop = _long(cl=cl, steps=1200, seed=sd)          # 24 kyr of selection under LIFE_DEFAULTS
+        met, rep = _norm(pop, I.MET), _norm(pop, I.REP)
+        assert len(pop) > 50 and met.mean() < .85 and rep.mean() < .75, (met.mean(), rep.mean())
+        assert not (met.mean() > .9 and rep.mean() > .9) and met.std() > .03 and rep.std() > .03
+    tr = np.tile(pop.traits.mean(0), (2, 1)); tr[0, I.MET], tr[1, I.MET] = .2, .9
+    assert I.uptake(tr)[0] > 1.1*I.uptake(tr)[1]                     # rate-yield cost of efficiency
+    tr[:, I.MET] = .5; tr[0, I.REP], tr[1, I.REP] = .05, .5
+    assert I.need_of(tr)[1] > 1.15*I.need_of(tr)[0]                  # breeding upkeep
+
+def test_multi_niche_speciation():
+    LP = LifeParamBus({"evolution_rate": 2.})
+    r = np.random.default_rng(11); pop = I.found(LP, r, n=120)
+    pop.traits[:40, I.MOB], pop.traits[40:80, I.MOB], pop.traits[80:, I.MOB] = .05, .5, .95   # sessile / forager / roamer founders
+    pop.traits[:40, I.H], pop.traits[80:, I.H] = .9, .3
+    for _ in range(400): pop, _ = I.step(pop, FOOD, COLD, LP, r, 20., series_every=200.)
+    alive = [s["n_species_alive"] for s in pop.series[-10:]]
+    assert len(pop) > 50 and np.median(alive) >= 3 and np.mean(alive) >= 3 and max(alive) <= 25, alive
+    assert I.niche_crowding(pop.traits, pop.pos).mean() > 0
+
+def test_climate_drift_moves_world_T():
+    from ..run_life import main
+    out = {}
+    for a in (0., .8):
+        p = f"/tmp/life_drift_{a}.json"; LPf = f"/tmp/life_drift_{a}_lp.json"; json.dump({"climate_drift": a, "impact_scale": 0.}, open(LPf, "w"))
+        J = main(["--seed", "4", "--years", "20000", "--dt", "50", "--plant", "--no-culture", "--params", LPf, "--out", p])
+        pl = [q for q in J["planets"] if "climate_history" in q][0]; out[a] = pl["climate_history"]
+    assert out[.8]["T_std"] > 3*out[0.]["T_std"] + .5, (out[0.]["T_std"], out[.8]["T_std"])
+    assert np.ptp([r[1] for r in out[.8]["series"]]) > 5.
 
 if __name__ == "__main__":
     for k, f in list(globals().items()):

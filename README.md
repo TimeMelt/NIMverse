@@ -75,6 +75,13 @@ Report per living planet: `individuals` (all living), `evolution.{evolution_seri
 - *Impacts*: kill chance scales with local crowding and is halved by hardiness; shelter draws (10% + 30% × ocean cover) survive outright, and a floor of max(3, `impact_refuge` × n) survivors holds unless the climate is already lethal. Shocks are logged in `evolution.impact_log`.
 New knobs: `sex_rate`, `climate_drift`, `impact_refuge`.
 
+**Imperfection fixes (trade-offs, niches, planetary drift).**
+- *Metabolism trade-off (rate vs yield)*: `uptake = 1.15 − 0.2·met_norm` scales both the competitive food share / intake cap and the brood rate, and efficient metabolisms lose a little stress reserve (`hardiness_eff = h·(1 − .05·met)`). Efficiency no longer pins at the 0.9 ceiling.
+- *Reproduction trade-off*: breeding machinery raises basal need (`× (1 + .3·rep_norm)`), and juveniles (<15 yr) of fast breeders face extra hazard `0.1·rep_norm²` that grows under climate stress.
+- *Niches*: competition is frequency-dependent: food share ÷ (phenotype-niche crowding)^0.8 over mobility band (sessile/forager/roamer) × hardiness band × climate belt (equatorial/temperate/polar), so rare niches pay and several species coexist. Clustering cut lowered to 0.6 × `speciation_dist`, min cluster 4, a daughter needs ≥4% of the living, and recently vanished ids are re-used by a matching cluster (less id churn).
+- *Planetary climate drift*: `world.ClimateDrift` (same 8.3/21 kyr cycles + flips, own rng stream) feeds `dT = −35 K × offset` into `world.step`, so T_K, water fraction, climate class and chronic stress all move; organisms read the offset from `climate.stressors` (no double count). Impact-winter dT counts as the one-off shock, not chronic stress; water weight in chronic stress is 0.6 (ocean refugia). `climate_history.series` and per-series `T_K` are reported; `plot_evolution` adds a planet-T vs hardiness panel.
+- seed 4, 40 kyr: end means metabolism .55 (was .87, cap .9), reproduction .21 (was .41, cap .5), mobility .49, hardiness .62; 15 species alive at the end (median 11, 99% of samples in 3–15), 285 ever; planet T 242–272 K (σ 3.7 K; σ ≈ 0 with drift=0).
+
     PYTHONPATH=/workspace/NIM python -m universe.run_life --seed 4 --years 40000 --dt 20 --out results/life_demo_seed4.json
     PYTHONPATH=/workspace/NIM python -m universe.plot_evolution        # -> results/life_evolution_traits_seed4.png
     PYTHONPATH=/workspace/NIM python -m universe.viewer_life --seed 4 --life results/life_demo_seed4.json && python -m universe.viewer_life_shots --seed 4 --tour 96

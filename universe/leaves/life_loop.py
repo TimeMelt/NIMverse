@@ -19,12 +19,16 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
     """model="individuals" (default): literal organisms with ids/parents + evolution (leaves.individuals); "cohorts": legacy cohort model."""
     P = as_bus(LP); hw = copy.deepcopy(hw); chem = chemistry.init_chem(h); gate = chemistry.planted_gate(0.) if plant else None
     bio = biosphere.Biosphere(); coh = []; pop = None; ser_every = max(dt, years/200.); series = []; clim = None; pkt = None; flux = None
-    hist = world.ClimateHistory(); cu = culture_mod.Culture(); kill_tot = 0.; n_imp = 0; impact_loss = 0.
+    drng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 11])        # own stream: drift does not perturb the main rng draws
+    drift = world.ClimateDrift(P["climate_drift"], drng) if P["climate_drift"] > 0 else None
+    hist = world.ClimateHistory(n=4000); cu = culture_mod.Culture(); kill_tot = 0.; n_imp = 0; impact_loss = 0.
     for k in range(int(years/dt)):
         t = k*dt; dist = 0.
         if disturb_at is not None and abs(t - disturb_at) < dt/2: dist = .8
         hw.step(t, dt, rng, P)
-        stress = {"dT": 0.}; stress.update(world.impacts(h, P, rng, dt))
+        stress = {"dT": 0.}; imp = world.impacts(h, P, rng, dt)
+        if drift is not None: stress.update(drift.step(t, dt, drng))          # planetary climate drift (T, water, class, stress)
+        stress.update({k: v for k, v in imp.items() if k != "dT"}); stress["dT"] += imp.get("dT", 0.); stress["impact_dT"] = imp.get("dT", 0.)
         clim = world.step(h, hw, P, dt, stress); hist.push(t, clim)
         chem = chemistry.step(chem, clim, hw, P, dt)
         gate = chemistry.abiogenesis_roll(chem, clim, P, rng, t, dt, gate)
@@ -46,7 +50,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
             catalog.poll(t)
         series.append(bio.total())
         if record is not None:
-            record(dict(planet=h.name, t_w=float(t), T=float(clim.T_K), water=float(clim.liquid_water_frac), biomass=float(bio.total()),
+            record(dict(planet=h.name, t_w=float(t), T=float(clim.T_K), drift=float(clim.stressors.get("drift_offset", 0.)), water=float(clim.liquid_water_frac), biomass=float(bio.total()),
                         alive=bool(bio.alive), o2=float(flux.o2), ch4=float(flux.ch4), pigments=float(flux.pigments), tech=float(flux.tech),
                         n_org=float(pkt.n) if (coh and pkt is not None) else 0., impacts=int(n_imp),
                         trait_means=(dict(pkt.trait_means) if (coh and pkt is not None) else {})))

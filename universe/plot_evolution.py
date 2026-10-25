@@ -10,7 +10,7 @@ def main(argv=None):
     a = ap.parse_args(argv); J = json.load(open(a.life))
     pl = next(p for p in J["planets"] if (p.get("evolution") and (a.planet is None or p["habitat"]["name"] == a.planet)))
     S = [s for s in pl["evolution"]["evolution_series"]]; t = np.array([s["t_w"] for s in S])/1e3
-    fig, ax = plt.subplots(1, 2, figsize=(13, 4.8), facecolor="#0b0f17")
+    fig, ax = plt.subplots(1, 3, figsize=(19, 4.8), facecolor="#0b0f17")
     for x in ax: x.set_facecolor("#0b0f17"); x.tick_params(colors="#bcd"); [sp.set_color("#345") for sp in x.spines.values()]
     for tr, c in zip(TRAITS, ["#4fc3f7", "#ffb74d", "#81c784", "#e57373"]):
         m = np.array([s["trait_means"][tr] if s["n_alive"] else np.nan for s in S], float); sd = np.array([s["trait_stds"][tr] if s["n_alive"] else np.nan for s in S], float)
@@ -20,6 +20,12 @@ def main(argv=None):
     ax[1].plot(t, [s["n_alive"] for s in S], color="#ffd040", label="living individuals"); ax[1].plot(t, [10*s["n_species"] for s in S], color="#ce93d8", label="species ×10")
     ax[1].plot(t, [s["generations_max"]/10 for s in S], color="#80cbc4", label="max generation ÷10")
     ax[1].set_title(f"population · births {pl['evolution']['total_births']} · species ever {pl['evolution']['species_ever']} · alive {pl['evolution'].get('n_species_alive', '?')}", color="w"); ax[1].set_xlabel("world time [kyr]", color="#bcd"); ax[1].legend(facecolor="#111a26", labelcolor="w", fontsize=8)
+    T = np.array([s.get("T_K") if s.get("T_K") is not None else np.nan for s in S], float)
+    ax[2].plot(t, T, color="#ff7f50", lw=1.6, label="planet T [K] (world box, incl. drift)"); ax[2].set_ylabel("T [K]", color="#ff7f50")
+    x2 = ax[2].twinx(); x2.tick_params(colors="#bcd")
+    x2.plot(t, [s["trait_means"]["hardiness"] if s["n_alive"] else np.nan for s in S], color="#e57373", lw=1.4, label="mean hardiness"); x2.set_ylim(0, 1)
+    ax[2].set_title("climate drift moves the planet and selection", color="w"); ax[2].set_xlabel("world time [kyr]", color="#bcd")
+    h1, l1 = ax[2].get_legend_handles_labels(); h2, l2 = x2.get_legend_handles_labels(); ax[2].legend(h1 + h2[:1], l1 + l2[:1], facecolor="#111a26", labelcolor="w", fontsize=8)
     out = a.out or f"{RES}/life_evolution_traits_seed{J['seed']}.png"; fig.tight_layout(); fig.savefig(out, dpi=110, facecolor=fig.get_facecolor()); print("wrote", out); return out
 
 if __name__ == "__main__": main()

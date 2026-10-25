@@ -47,4 +47,20 @@ class ClimateHistory:
         T = np.array([r[1] for r in self.rows]); W = np.array([r[2] for r in self.rows])
         return dict(n=len(self.rows), T_mean=float(T.mean()), T_std=float(T.std()), T_min=float(T.min()), T_max=float(T.max()),
                     water_mean=float(W.mean()), water_min=float(W.min()), impacts_total=self.impacts,
-                    tail=[[r[0], round(r[1], 2), round(r[2], 3), r[3]] for r in self.rows[-5:]])
+                    tail=[[r[0], round(r[1], 2), round(r[2], 3), r[3]] for r in self.rows[-5:]],
+                    series=[[r[0], round(r[1], 2), round(r[2], 3)] for r in self.rows[::max(1, len(self.rows)//200)]])
+
+DRIFT_K = 35.   # K of planetary cooling per unit of organism-felt stress offset (stress uses |T-293|/80)
+
+def drift_offset(t, phase, flip, a):
+    """Shared nonstationary climate signal: two incommensurate cycles (8.3 & 21 kyr) + telegraph flip state, scaled by climate_drift a."""
+    return float(a*(.22*np.sin(2*np.pi*t/8300. + phase) + .12*np.sin(2*np.pi*t/21000. + 2*phase) + .12*flip))
+
+class ClimateDrift:
+    """Planetary climate drift: same cycles/flips that organisms feel, applied to the world box as dT (and thus water_frac,
+    climate class, chronic stress). step() -> stress dict {dT, drift_offset, drift_flip} to merge into world.step(stress=...)."""
+    def __init__(self, a, rng): self.a, self.phase, self.flip, self.offset = float(a), float(rng.uniform(0, 2*np.pi)), 0., 0.
+    def step(self, t, dt, rng):
+        if rng.random() < 1 - np.exp(-dt/12000.): self.flip = -self.flip if self.flip else float(rng.choice([-1., 1.]))
+        self.offset = drift_offset(t, self.phase, self.flip, self.a)
+        return {"dT": -DRIFT_K*self.offset, "drift_offset": self.offset, "drift_flip": self.flip}
