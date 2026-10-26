@@ -291,3 +291,29 @@ Tests: the seed-4 test bounds are unchanged (ever ≤ 70, median alive 3–12, m
 Tests: `test_cosmo_strong_field_wiring` in `leaves/test_deferred_leaves.py`.
 
 Remaining limits: no GR integrator (geodesics, Kerr orbits, GW inspiral), no perturbation cosmology or lensing, `CosmoDrive` does not drive sim2 leapfrog time, and no spin evolution (χ=0 by default).
+
+## learn_life training (improvement item 7)
+
+Command (finished, ~1830 s wall):
+```
+PYTHONPATH=.:/workspace/NIM python -m universe.learn_life --model individuals --seed-list 3,4,6,7,8,12,13,100 \
+  --years 4000 --iters 30 --freeze 'stellar_evolve,stellar_age_Gyr,stellar_age_rate,tech_*'
+```
+- Loss = `hab + eco + 2*rec + W_EXT*ext` (W_EXT=2; `ext` = fraction of seeds whose biosphere goes extinct; `rec` = planted-recovery failure).
+- Method: numpy SPSA over normalized LIFE_SPACE, 27/41 params free (stellar_evolve, stellar_age_*, tech_* frozen); checkpointed.
+- Train loss 0.4879 → **0.2237** (hab 0.108, eco 0.115, rec 0, ext 0). Loss curve: `results/learned_life_loss.png`.
+
+Validation (`python -m universe.validate_learn_life` → `results/learned_life_validation.json`):
+
+| set | defaults loss | learned loss | notes |
+|---|---|---|---|
+| train (8 seeds, 4 kyr) | 0.488 | **0.224** | ext 0.0625 → 0 |
+| held-out (0,1,2,5,9,10,11,14,101,102) | 1.950 | **1.000** | extinct seeds 3 → 1 |
+| seed 4, 20 kyr | **2.575** | 2.609 | both rec/ext 0.5; species ever 27 → 29 |
+| seed 4, 4 kyr + culture | 2.517 | **0.519** | rec/ext 0.5 → 0 |
+
+Top param deltas vs LIFE_DEFAULTS: impact_scale 1 → 0.043 (−96%), reproduction_rate 0.255 → 0.191 (−25%), eco_growth 0.425 → 0.528 (+24%), evolution_rate 1 → 0.764 (−24%), flare_rate_mult 1 → 1.22 (+22%), abio_p 4e-4 → 4.8e-4 (+21%), sex_rate 0.30 → 0.345, metabolism_eff 0.50 → 0.573, photo_boost 1 → 1.14, hardiness 0.50 → 0.431.
+
+**LIFE_DEFAULTS were NOT overwritten**: the learned set ships as `results/learned_life.json` (merge with `{**LIFE_DEFAULTS, **params}`), because seed‑4 20 kyr is marginally worse.
+
+Leftovers: QrnLOpt optimizer skipped (SPSA only); training on full seeds 0–19 is still expensive; **impact_scale drifted to ~0** — the optimizer is effectively switching off impacts to avoid extinctions, which is physically unrealistic and should be bounded/frozen in a future run; seed 4 still goes extinct at 20 kyr under both sets.
