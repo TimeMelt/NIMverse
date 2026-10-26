@@ -209,3 +209,45 @@ def test_biosign_spectra():
     d = cat.first_detection("o2_760"); l = [x for x in d["lines"] if x["name"] == "o2_760"][0]
     assert abs(l["obs_nm"] - 760*3) < 1e-6 and any(abs(v.get("obs_nm", 0) - 2280) < 1e-6 for v in s["first"].values())
     assert r["biosign"]["h2o"] > 0 and r["biosign"]["lines"]
+
+def test_culture_leftovers_closed():
+    """Culture v3: polities/conflict, energy mix, aerosols, acidification, tech->chem, mitigation."""
+    from .biosphere import Biosphere, capacity
+    from .packets import ChemInventory, ClimateStress
+    r = np.random.default_rng(0); pk = CreaturePacket(n=10.); big = Biosphere(1., .2, .1, True, 3.)
+    def roll(n=100, c=None, **k):
+        c = c or culture.Culture(active=True, level=.8, t_start=100., org_age=2000.); LP = LifeParamBus(k)
+        for t in range(n): c = culture.step(c, big, pk, LP, r, t*10., 10.)
+        return c
+    c = roll(1)
+    assert 2 <= len(c.polities) <= 4 and abs(sum(p["share"] for p in c.polities) - 1) < 1e-9
+    assert abs(sum(p["level_contrib"] for p in c.polities) - c.level) < 1e-9 and abs(sum(c.energy_mix.values()) - 1) < 1e-9
+    hot = roll(50, tech_pollute=1.5, tech_mitigate=0.); assert hot.conflict > 0 and hot.tech_kill > 0          # stress -> conflict
+    assert roll(50, tech_pollute=1.5, tech_mitigate=0., tech_conflict=0.).tech_kill < hot.tech_kill
+    # fossil vs renewable
+    kw = dict(tech_pollute=.5, tech_warm_K=10., tech_mitigate=0., tech_aerosol_K=0., tech_conflict=0.)
+    fos, ren = roll(200, tech_fossil_frac=1., **kw), roll(200, tech_fossil_frac=0., **kw)
+    assert fos.pollution > 3*ren.pollution and fos.greenhouse_K > ren.greenhouse_K and fos.acidification > 3*ren.acidification
+    assert ren.draw > fos.draw                                                                                  # renewables use land
+    # aerosols cool
+    aer = roll(200, tech_fossil_frac=1., tech_pollute=.5, tech_warm_K=10., tech_mitigate=0., tech_aerosol_K=10.)
+    assert aer.aerosol_K > 0 and aer.warm_K < fos.warm_K and abs(aer.warm_K - (aer.greenhouse_K - aer.aerosol_K)) < 1e-9
+    assert roll(200, tech_fossil_frac=1., tech_pollute=.5, tech_warm_K=1., tech_mitigate=0., tech_aerosol_K=30.).warm_K < 0
+    # acidification cuts wet-world capacity
+    ch = ChemInventory(dict(C=1, H=4, O=2, N=.5, P=.05, S=.1, organics=.5), 0., True)
+    wet = ClimateStress(290., 1., "temperate", {}); acid = ClimateStress(290., 1., "temperate", {"tech_acid": fos.acidification})
+    assert fos.acidification > .1 and capacity(acid, ch) < capacity(wet, ch)
+    def runh(**k): return run_habitat(hab(1.), SUN, LifeParamBus(dict(tech_rate=1e-2, tech_threshold=.1, tech_mitigate=0., **k)), np.random.default_rng(2), 20000, 20., plant=True)
+    a0, a1 = runh(tech_acid=0.), runh(tech_acid=5., tech_pollute=1.)
+    assert a1["culture"]["peak"]["tech_acid"] > .3 and a1["biosphere"]["P"] < a0["biosphere"]["P"]
+    # tech -> chemistry
+    c2 = culture.apply_chem(ch, fos, LifeParamBus({"tech_chem": 10.}), 100.)
+    assert c2.species["organics"] > ch.species["organics"] and c2.redox != ch.redox
+    assert culture.apply_chem(ch, culture.Culture(), LifeParamBus({}), 100.) is ch
+    assert a1["chem"]["species"]["organics"] != runh(tech_acid=5., tech_pollute=1., tech_chem=0.)["chem"]["species"]["organics"]
+    # mitigation
+    kw = dict(tech_pollute=1.5, tech_warm_K=10.)
+    mit, nom = roll(300, tech_mitigate=5e-3, **kw), roll(300, tech_mitigate=0., **kw)
+    assert mit.mitigation > .3 and nom.mitigation == 0 and mit.energy_mix["fossil"] < nom.energy_mix["fossil"]
+    assert mit.pollution < nom.pollution and mit.acidification < nom.acidification
+    calm = roll(300, tech_pollute=.05); assert calm.mitigation == 0                                             # no crisis -> stays low

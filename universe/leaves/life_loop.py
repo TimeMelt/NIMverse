@@ -46,6 +46,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         if stress["impact_dT"]:      # impact winter freezes water briefly: the shock is the kill, chronic stress uses pre-impact water
             clim.stressors["water_chronic"] = world.step(h, hw, P, dt, dict(stress, dT=stress["dT"] - stress["impact_dT"])).liquid_water_frac
         chem = chemistry.step(chem, clim, hw, P, dt)
+        if culture and (cu.active or cu.pollution > 0): chem = culture_mod.apply_chem(chem, cu, P, dt)   # last step's industry -> organics/redox
         gate = chemistry.abiogenesis_roll(chem, clim, P, rng, t, dt, gate)
         bio = biosphere.seed(bio, gate); m0 = bio.total()
         bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist)
@@ -71,6 +72,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         if record is not None:
             record(dict(planet=h.name, t_w=float(t), T=float(clim.T_K), drift=float(clim.stressors.get("drift_offset", 0.)), water=float(clim.liquid_water_frac), biomass=float(bio.total()),
                         alive=bool(bio.alive), o2=float(flux.o2), ch4=float(flux.ch4), pigments=float(flux.pigments), tech=float(flux.tech), tech_dT=float(tstress.get("tech_dT", 0.)), pollution=float(tstress.get("tech_pollution", 0.)),
+                        aerosol_K=float(tstress.get("tech_aerosol_K", 0.)), acid=float(tstress.get("tech_acid", 0.)), mitigation=float(tstress.get("tech_mitigation", 0.)),
                         n_org=float(pkt.n) if (coh and pkt is not None) else 0., impacts=int(n_imp),
                         trait_means=(dict(pkt.trait_means) if (coh and pkt is not None) else {})))
     if pop is not None and (not pop.series or pop.series[-1]["t_w"] < pop.t): pop.series.append(pop.stats())

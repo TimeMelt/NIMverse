@@ -10,9 +10,12 @@ class Biosphere:
     def total(self): return self.P + self.C + self.D
     def to_dict(self): return asdict(self)
 
+ACID_BIO = .6
+
 def capacity(climate, chem):
     if climate.liquid_water_frac <= 0 or not chem.polymer_ready: return 0.
-    return float(climate.liquid_water_frac*(1. + min(chem.species["organics"], 2.)))
+    acid = (climate.stressors or {}).get("tech_acid", 0.)      # ocean acidification (culture v3) cuts wet-world productivity
+    return float(climate.liquid_water_frac*(1. + min(chem.species["organics"], 2.))*(1 - ACID_BIO*min(acid, 1.)*climate.liquid_water_frac))
 
 def seed(bio, gate, amount=1e-3):
     if gate.fired and not bio.alive: bio.P, bio.D, bio.alive, bio.diversity = amount, amount*.1, True, 1.

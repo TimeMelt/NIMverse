@@ -24,9 +24,12 @@ LIFE_SPACE = {
     "tech_rate": (0., 1e-2), "tech_threshold": (.1, 2.),
     # culture <-> biosphere coupling: biomass/yr drawn at level 1, pollution stock at level 1, K warming per unit pollution
     "tech_draw": (0., .5), "tech_pollute": (0., 2.), "tech_warm_K": (0., 60.),
+    # culture v3: fossil share of energy mix, K cooling per unit aerosol, acidification gain, chem outgassing, mitigation rate, conflict gain
+    "tech_fossil_frac": (0., 1.), "tech_aerosol_K": (0., 30.), "tech_acid": (0., 5.), "tech_chem": (0., 10.),
+    "tech_mitigate": (0., .01), "tech_conflict": (0., 2.),
 }
 LIFE_DEFAULTS = {k: (lo+hi)/2 for k, (lo, hi) in LIFE_SPACE.items()}
-LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=4e-4, snowball_K=238., organic_thresh=.18, flare_rate_mult=1., flare_amp=2., stellar_age_Gyr=4.6, stellar_evolve=0., stellar_age_rate=1., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5, tech_draw=.001, tech_pollute=.1, tech_warm_K=5.,
+LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=4e-4, snowball_K=238., organic_thresh=.18, flare_rate_mult=1., flare_amp=2., stellar_age_Gyr=4.6, stellar_evolve=0., stellar_age_rate=1., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5, tech_draw=.001, tech_pollute=.1, tech_warm_K=5., tech_fossil_frac=.7, tech_aerosol_K=2., tech_acid=1., tech_chem=.1, tech_mitigate=2e-4, tech_conflict=1.,
                      evolution_rate=1., pop_cap=300., sel_strength=1., speciation_dist=.4,
                      sex_rate=.3, climate_drift=.5, impact_refuge=.05)
 TRAITS = ("metabolism_eff", "mobility", "reproduction_rate", "hardiness")

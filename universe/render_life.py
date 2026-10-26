@@ -63,7 +63,10 @@ def card(rep, path):
     rows = [("Temperature", f"{c['T_K']:.1f} K ({c['T_K']-273.15:.1f} °C) · {c['climate_class']}"), ("Liquid water", f"{c['liquid_water_frac']*100:.0f}% of surface"),
             ("Life began", f"t = {p['gate']['t_w']:.0f} yr (abiogenesis, not planted)"), ("Biomass", f"{p['biomass']:.2f}  · diversity {p['biosphere']['diversity']:.0f}"),
             ("Creatures", f"n ≈ {p['creatures']['n']:.2f}" if p.get("creatures") else "—"), ("Technology", f"level {p['tech']:.2f} (culture since t={p['culture']['t_start']:.0f} yr)" if p.get("culture") else f"{p['tech']:.2f}")]
-    for i, (k, v) in enumerate(rows): ax.text(.08, .45 - i*.045, k, color="#5cff7a", fontsize=12); ax.text(.36, .45 - i*.045, v, fontsize=12)
+    cu = p.get("culture") or {}
+    if "energy_mix" in cu: rows.append(("Tech climate", f"net {cu['warm_K']:+.2f} K (GHG {cu['greenhouse_K']:+.2f}, aerosol −{cu['aerosol_K']:.2f}) · acid {cu['acidification']:.2f} · mitig {cu['mitigation']:.2f}\n"
+                                                     f"fossil {cu['energy_mix']['fossil']*100:.0f}% · {len(cu['polities'])} polities · conflict {cu['conflict']:.2f}"))
+    for i, (k, v) in enumerate(rows): ax.text(.08, .45 - i*.04, k, color="#5cff7a", fontsize=12); ax.text(.36, .45 - i*.04, v, fontsize=12 if "\n" not in v else 9, va="top" if "\n" in v else "baseline")
     ax.text(.08, .17, "Biosignatures", color="#5cff7a", fontsize=12)
     for i, k in enumerate(BIO):
         y = .13 - i*.03; ax.add_patch(plt.Rectangle((.3, y), .55, .018, color="#222")); ax.add_patch(plt.Rectangle((.3, y), .55*min(b[k], 1), .018, color=BC[i]))
