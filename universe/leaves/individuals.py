@@ -20,12 +20,15 @@ E_MAX = 12.           # energy store cap (~24 yr of basal burn: buffers famine s
 SPECIES_EVERY = 500.  # yr between re-clusterings of the living set
 NEW_SPECIES_FRAC = .06 # a split founds a new species_id only if the daughter cluster holds >= 6% of the living
 RECENT_YR = 10000.     # vanished species ids within this window can be re-used by a matching cluster
-RECYCLE_R = 2.0       # a new cluster re-uses a recent vanished id if its centroid is within RECYCLE_R x cut
+RECYCLE_R = 1.5       # a new cluster re-uses a recent vanished id if its centroid is within RECYCLE_R x cut (reach widens smoothly as mint tokens run out)
 CL_CUT = .6          # dendrogram cut as a fraction of speciation_dist
 MIN_SPECIES = 4       # clusters smaller than this are merged into the nearest larger one
 SPLIT_SEP = .8         # a daughter founds a new id only if its centroid sits >= SPLIT_SEP x cut from its parent cluster (else merge back)
 SOFT_MAX = 10         # soft cap: above SOFT_MAX living species ids, the daughter-size bar rises by SOFT_K per extra cluster (no hard ceiling)
 SOFT_K = .5
+MINT_TAU, MINT_CAP = 700., 3.  # soft mint-rate limit: new-id tokens refill 1 per MINT_TAU yr (bucket <= MINT_CAP); with no token a daughter takes the nearest recent vanished id (any distance) or merges back
+SMOOTH_R = 1.
+RECYCLE_FAR = 2.          # without a token, recycling reaches out to RECYCLE_FAR x RECYCLE_R x cut before merging back into the parent
 GEO_W = .5            # weight of great-circle distance (rad/pi) in the speciation metric (allopatry)
 WATER_W = .6         # weight of dry/frozen surface in chronic stress (ocean refugia buffer the water-fraction swings)
 LAT_STRESS = .3       # poles harsher than equator (mean zero over the sphere): local adaptation -> geographic species
@@ -53,14 +56,21 @@ def uptake(tr):
     """Rate-yield trade-off: efficient metabolism (high yield) forages/assimilates slowly; convex: 1.15 at met=.1 -> .85 at met=.9."""
     x = (tr[:, MET] - LO[MET])/SPAN[MET]; return UPT0 - UPT1*x - UPT2*x*x   # convex cost: interior optimum, no bang-bang switching
 
+NB_MOB, NB_HARD, NB_BELT = 4, 4, (.35, .75)   # niche grid: mobility bands x hardiness bands x climate belts (|sin lat| edges)
+NICHE_KERNEL = 0.     # >0: continuous Gaussian kernel crowding (width in normalised trait units) instead of discrete bands
+
 def niche_crowding(tr, pos):
-    """Relative crowding (1 = even) of each organism's phenotype niche: mobility (3 bands: sessile/forager/roamer) x hardiness
-    (3 bands) x climate belt (equatorial / temperate / polar). Competition is mostly within a niche, so rare niches get more food."""
+    """Relative crowding (1 = even) of each organism's phenotype niche: mobility (NB_MOB bands: sessile/forager/roamer) x hardiness
+    (NB_HARD bands) x climate belt (equatorial / temperate / polar). Competition is mostly within a niche, so rare niches get more food."""
     n = len(tr)
     if not n: return np.zeros(0)
-    mb = np.clip((tr[:, MOB]*3).astype(int), 0, 2); hb = np.clip((tr[:, H]*3).astype(int), 0, 2)
-    lb = np.digitize(np.abs(pos[:, 1]), [.35, .75]); c = (mb*3 + hb)*3 + lb
-    cnt = np.bincount(c, minlength=27); occ = (cnt > 0).sum(); return cnt[c]/(n/occ)
+    lb = np.digitize(np.abs(pos[:, 1]), NB_BELT)
+    if NICHE_KERNEL > 0:
+        z = np.stack([tr[:, MOB], tr[:, H]], 1); d2 = ((z[:, None] - z[None])**2).sum(-1)
+        k = np.exp(-d2/(2*NICHE_KERNEL**2))*(lb[:, None] == lb[None]); c = k.sum(1); return c/c.mean()
+    mb = np.clip((tr[:, MOB]*NB_MOB).astype(int), 0, NB_MOB-1); hb = np.clip((tr[:, H]*NB_HARD).astype(int), 0, NB_HARD-1)
+    nb = len(NB_BELT) + 1; c = (mb*NB_HARD + hb)*nb + lb
+    cnt = np.bincount(c, minlength=NB_MOB*NB_HARD*nb); occ = (cnt > 0).sum(); return cnt[c]/(n/occ)
 
 def _rand_pos(rng, n):
     v = rng.normal(size=(n, 3)); return v/np.linalg.norm(v, axis=1, keepdims=True)
@@ -234,9 +244,10 @@ def recluster(pop, P):
     if small.any():
         cols = np.isin(lab, big); j = np.argmin(np.where(cols[None, :], Dm[small], np.inf), axis=1); lab[small] = lab[j]
     new = pop.species.copy(); used = set(); cut = CL_CUT*P["speciation_dist"]
-    frac = NEW_SPECIES_FRAC*(1 + SOFT_K*max(0, len(np.unique(pop.species)) - SOFT_MAX)); cen_of = {}
+    dt_ = pop.t - getattr(pop, "mint_t", pop.t); pop.mint_t = pop.t; pop.mint_tok = min(MINT_CAP, getattr(pop, "mint_tok", MINT_CAP) + dt_/MINT_TAU)
+    near = []; frac = NEW_SPECIES_FRAC*(1 + SOFT_K*max(0, len(np.unique(pop.species)) - SOFT_MAX)); cen_of = {}
     for c in sorted(np.unique(lab), key=lambda c: -int((lab == c).sum())):
-        m = lab == c; ids, cnt = np.unique(pop.species[m], return_counts=True); o = np.argsort(-cnt); pick = None
+        m = lab == c; ids, cnt = np.unique(pop.species[m], return_counts=True); o = np.argsort(-cnt); pick = None; near = []
         for q in o:
             if int(ids[q]) not in used: pick = int(ids[q]); break
         if pick is None and m.sum() < frac*n: pick = int(ids[o[0]])   # small daughter cluster: no new id (hysteresis + soft cap)
@@ -244,8 +255,11 @@ def recluster(pop, P):
         if pick is None and int(ids[o[0]]) in cen_of and np.linalg.norm(cen - cen_of[int(ids[o[0]])]) < SPLIT_SEP*cut: pick = int(ids[o[0]])   # too close to parent: merge back
         if pick is None:                         # re-use a recently seen, now unused id whose centroid is close (no churn)
             near = [(np.linalg.norm(cen - c), i) for i, (c, tt) in pop.recent.items() if i not in used and pop.t - tt <= RECENT_YR]
-            if near and min(near)[0] < RECYCLE_R*cut: pick = int(min(near)[1])
-        if pick is None: pick = pop.next_species; pop.next_species += 1
+            if near and min(near)[0] < RECYCLE_R*cut*(1 + (RECYCLE_FAR - 1)*SMOOTH_R*max(0., 1 - pop.mint_tok/MINT_CAP)): pick = int(min(near)[1])
+        if pick is None and getattr(pop, "mint_tok", MINT_CAP) < 1:   # no token: wide recycle, else merge back under the parent id
+            if near and min(near)[0] < RECYCLE_FAR*RECYCLE_R*cut: pick = int(min(near)[1])
+            else: pick = int(ids[o[0]])
+        if pick is None: pick = pop.next_species; pop.next_species += 1; pop.mint_tok = getattr(pop, "mint_tok", MINT_CAP) - 1
         used.add(pick); new[m] = pick; pop.recent[pick] = (cen, pop.t); cen_of.setdefault(pick, cen)
     pop.recent = {i: v for i, v in pop.recent.items() if pop.t - v[1] <= RECENT_YR}
     pop.species = new

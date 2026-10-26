@@ -277,3 +277,13 @@ def test_multiseed_ready_proxy():
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"): f(); print("ok", k)
+
+# ---- species leftovers: multi-seed churn band (lighter proxy of the 40 kyr README scan) ----
+def test_species_churn_multiseed_light():
+    from ..run_life import main
+    for sd in (8, 12):
+        J = main(["--seed", str(sd), "--years", "15000", "--dt", "20", "--out", f"/tmp/life_ms_{sd}.json"])
+        e = [q for q in J["planets"] if q.get("evolution")][0]["evolution"]; s = e["evolution_series"]
+        sa = [x["n_species_alive"] for x in s]; n = [x["n_alive"] for x in s]
+        assert e["n_species_ever"] <= 45 and np.median(sa) >= 3 and min(sa[-10:]) >= 2 and min(n[3:]) >= 50, (sd, e["n_species_ever"], sa, min(n))
+    assert I.NB_MOB*I.NB_HARD >= 16 and I.MINT_TAU > 0                # finer niche grid + mint-rate limiter on

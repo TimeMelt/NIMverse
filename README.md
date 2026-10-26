@@ -231,4 +231,36 @@ What drives churn: alive stays ~5, so the ~100 ids came from turnover (clusters 
 
 Sweep notes: raising `NICHE_ALPHA` to 1.1–1.2 *raises* species ever (114–128) because rare niches survive and split more. Raising `NEW_SPECIES_FRAC` to ≥ .08 or `SPECIES_EVERY` to 1000 drops alive to 1–3, and a soft cap at ≤ 6 collapses to a single species. So I kept niche crowding as it was and went through id hysteresis and recycling.
 - Test: `test_cold_spell_floor_species_churn_metabolism_seed4` now asserts species ever ≤ 70 (was ≤ 120), median alive 3–12, and ≥ 3 alive over the last 10 samples. Full suite: 48 passed.
-- Leftovers: species ever is quite sensitive to these knobs (for example `RECYCLE_R` 2.5 gives 38, 3.5 gives 13), and only seed 4 was tuned. A finer niche grid (more mobility/hardiness bands) is untried.
+- Leftovers: closed below.
+
+## Species leftovers closed
+All 40 kyr runs use `run_life --seed S --years 40000 --dt 20` with default knobs.
+- **Mint-rate limiter (new):** `MINT_TAU = 700`, `MINT_CAP = 3`. New-id tokens refill at 1 per 700 yr, and the bucket holds at most 3. When no token is left, a daughter cluster takes the nearest recently vanished id within `RECYCLE_FAR` (2) × `RECYCLE_R` × cut. If there is none, it merges back under its parent id. The recycle reach also widens smoothly as tokens run out (`SMOOTH_R`). Over 40 kyr this puts a soft ceiling of about 60 on species ever, independent of the recycle radius. `RECYCLE_R` goes 2.0 → **1.5**, because the limiter now does most of the work.
+- **Finer niche grid:** `niche_crowding` now has 4 mobility bands × 4 hardiness bands × 3 climate belts (`NB_MOB`, `NB_HARD`, `NB_BELT`; was 3×3×3). An optional continuous Gaussian-kernel mode (`NICHE_KERNEL > 0`) is available but off by default.
+
+Sensitivity on seed 4 (species ever):
+
+| RECYCLE_R | 1.0 | 1.5 | 2.0 | 2.5 | 3.0 | 3.5 |
+|---|---|---|---|---|---|---|
+| before (d317c45) | – | 78 | **51** | 38 | 14 | 14 |
+| after | 58 | **45** | 39 | 25 | – | 18 |
+
+Around the default (±0.5), the spread drops from 78→38 (40 ids) to 58→39 (19 ids). Across all knob values, alive median stays at 5 and min pop at 110–117. Large radii still lower species ever, which is expected: more recycling means fewer ids. The ceiling stops the low-radius side from blowing up.
+
+Multi-seed, 40 kyr, defaults:
+
+| seed | ever before | ever after | alive median | last-10 min | max alive | min pop |
+|---|---|---|---|---|---|---|
+| 4 | 51 | **45** | 5 | 4 | 9 | 114 |
+| 3 | 90 | 56 | 5 | 4 | 10 | 59 |
+| 6 | 94 | 53 | 5 | 2 | 9 | 46 |
+| 7 | 87 | 58 | 5 | 3 | 11 | 71 |
+| 8 | 47 | 46 | 5 | 3 | 10 | 129 |
+| 12 | 21 | 57 | 5 | 2 | 11 | 96 |
+| 13 | 36 | 56 | 5 | 4 | 11 | 79 |
+
+On every seed, species ever falls between 45 and 58, where it used to range from 21 to 94. No seed collapses to a single living species, and none goes extinct. Seed 12 rises from 21, because the old setting suppressed splits there. The desert seeds (3, 6, 7) have a pre-existing low point of about 46–60 organisms, unchanged by this pass.
+
+Niche-grid outcome on seed 4 (with the limiter on): 3×3 gives 52, **4×4 gives 45**, 5×5 gives 52 (min pop 108), 4×4 with `NICHE_ALPHA` .6 gives 47, 4×4 with 4 belts gives 48, and the kernel at σ .12 or .2 gives 51. Across the six other seeds, 4×4 is neutral to slightly better than 3×3 (last-10 min alive is higher on 3 and 13). The finer grid no longer raises churn, because the limiter absorbs the extra rare-niche splits. Shipped 4×4.
+
+Tests: the seed-4 test bounds are unchanged (ever ≤ 70, median alive 3–12, metabolism band). The new `test_species_churn_multiseed_light` runs seeds 8 and 12 at 15 kyr as a cheaper proxy (16 and 23 species ever) and asserts ever ≤ 45, median alive ≥ 3, last-10 alive ≥ 2 and min pop ≥ 50. Full suite: 49 passed.
