@@ -2,6 +2,7 @@
 import numpy as np
 from dataclasses import dataclass, field, asdict
 from .packets import NicheOffer, BioSignFlux, as_bus
+from . import biosign
 
 @dataclass
 class Biosphere:
@@ -36,7 +37,8 @@ def step(bio, climate, chem, LP=None, dt_w_yr=1., disturbance=0.):
         if b.total() < 1e-9: b.alive, b.P, b.C, b.D = False, 0., 0., 0.
     free = max(0., K - b.total())
     niche = NicheOffer(float(K), int(b.alive)*3, float(b.P*.5 + free*.1) if b.alive else 0.)
-    flux = BioSignFlux(float(.21*b.P/(1+b.P)), float(1e-3*b.D/(1+b.D) + 5e-4*b.C/(1+b.C)), float(b.P/(1+b.P)), 0.)
+    flux = BioSignFlux(float(.21*b.P/(1+b.P)), float(1e-3*b.D/(1+b.D) + 5e-4*b.C/(1+b.C)), float(b.P/(1+b.P)), 0., biosign.h2o_column(climate))
+    biosign.attach(flux)
     return b, niche, flux
 
 def apply_creatures(bio, pkt):

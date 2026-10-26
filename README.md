@@ -162,3 +162,25 @@ The four leftovers from the pass above are now covered (all toy-level):
 - **System age prior:** `stellar.age_prior(M, seed)` is a deterministic log-uniform draw in [0.1, min(0.9·t_MS, 12)] Gyr, so massive stars come out younger. `life_loop.host_weather(S, seed=...)` stores it in `hw.age_prior_Gyr`, or uses `S["age_Gyr"]` if the system carries one. Precedence at the first `evolve()`: a non-default LP `stellar_age_Gyr` wins (`age_source="knob"`). Otherwise the system prior is used (`age_source="system"`). Bare `HostWeather.from_star` has no prior and uses the knob (4.6). The `life_loop` report has `stellar_age={prior_Gyr, source, age0_Gyr}`.
 - Tests: `test_stellar_post_ms_track`, `test_blackbody_uv_bands`, `test_live_habitat_hz_sync`, `test_system_age_prior`. The seed-4 40 kyr demo was rerun: every life/biosphere/radiation field is identical; only host/habitat report fields changed.
 - Still out of scope: full radiative transfer, real MESA tracks (He flash, HB, AGB, WD), cosmology coupling, culture depth, GR.
+
+## Biosignatures with spectra (improvement item 3)
+
+`universe/leaves/biosign.py` turns `BioSignFlux` scalars into spectral features. This is a toy, physically directed model with no radiative transfer. `BioSignFlux` keeps `o2, ch4, pigments, tech` and adds `h2o`, set from climate as `.5·liquid_water_frac·sigmoid((T−260)/12)`, plus `lines`.
+
+| line | species | rest λ (nm) | kind | weight |
+|---|---|---|---|---|
+| o2_760 | O₂ A-band | 760 | absorption | 1.0 |
+| o2_690 | O₂ B-band | 690 | absorption | 0.4 |
+| ch4_1650 | CH₄ | 1650 | absorption | 1.0 |
+| ch4_2300 | CH₄ | 2300 | absorption | 0.7 |
+| h2o_1400 | H₂O | 1400 | absorption | 1.0 |
+| h2o_1900 | H₂O | 1900 | absorption | 0.8 |
+| redge_720 | pigments (red edge) | 720 | continuum step | 1.0 |
+| tech_589 | tech (Na-lamp city lights) | 589 | emission | 1.0 |
+| tech_10um | tech (waste-heat IR excess) | 10000 | IR excess | 0.6 |
+
+- **Producers:** `biosphere.step` sets `h2o` and `lines` (`strength = scalar·weight`). `life_loop` rebuilds `lines` after culture sets `tech`.
+- **Observers:** `ObserverCatalog.emit` dims the lines exactly as it dims the scalars (`1/d²·(1+z)⁻²·aperture`, capped at 1) and records `obs_nm = rest_nm·(1+z)`. `poll` detects a line when `strength ≥ thresh[species]·weight`, which gives parity with the scalar test. Line names are appended to `detected`, and each log entry carries `lines=[{name, rest_nm, obs_nm, strength}]`. `summary()` adds `lines_detected`, and `first[planet:line]` includes `z` and `obs_nm`. Legacy scalar keys are unchanged, and `h2o` (thresh .02) is a new scalar key.
+- **Seed 4 @ 40 kyr:** every life/biosphere field is identical (biosign only gains `h2o` and `lines`). Detections went from 385 to 400, because H₂O is visible from t=0, before life. Lines detected: o2_760, o2_690, h2o_1400, h2o_1900, redge_720, tech_589, tech_10um. CH₄ stays below threshold (9.4e-5 < 1e-4), as before.
+- **Test:** `test_biosign_spectra` checks O₂ vs producers, H₂O vs wetness, tech lines, empty lines on a dead world, and obs_nm = 3·rest at z=2. It also runs an integration case with a z=2 observer, where o2_760 is detected at 2280 nm.
+- **Leftovers:** no full RT, no line profiles or continuum shape, no instrument noise or S/N, no retrieval, no stellar-type contrast scaling (host `uv_bands` not folded in), and no false-positive (abiotic O₂) modelling.

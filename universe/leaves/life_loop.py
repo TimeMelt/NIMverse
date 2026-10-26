@@ -6,6 +6,7 @@ from ..bodies import lum, temp
 from . import stellar, world, chemistry, biosphere, organisms, individuals, culture as culture_mod
 from .packets import HostWeather, ScoreBus, as_bus
 from .radiation import ObserverCatalog, Observer
+from . import biosign
 from .system_habitat import habitats_from_system, candidate
 
 def host_weather(S, distance_pc=None, M_override=None, seed=None):
@@ -57,7 +58,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         if coh and model != "individuals":
             coh, pkt = organisms.step(coh, niche, clim, P, rng, dt); bio = biosphere.apply_creatures(bio, pkt)
         elif not coh and pkt is not None and pkt.n > 0: pkt = None
-        if culture: cu = culture_mod.step(cu, bio, pkt if coh else None, P, rng, t, dt, culture_min_age); flux.tech = float(cu.level)
+        if culture: cu = culture_mod.step(cu, bio, pkt if coh else None, P, rng, t, dt, culture_min_age); flux.tech = float(cu.level); biosign.attach(flux)
         if catalog is not None:
             if k % emit_every == 0: catalog.emit(t, h.name, flux)
             catalog.poll(t)

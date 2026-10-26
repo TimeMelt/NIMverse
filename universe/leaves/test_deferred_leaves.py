@@ -164,3 +164,24 @@ def test_system_age_prior():
     assert hw.age_source == "system" and hw.age0_Gyr == stellar.age_prior(1., 7)
     hk = host_weather(S, seed=7); hk.step(0., 10., r, LifeParamBus({"stellar_age_Gyr": 2.}))
     assert hk.age_source == "knob" and hk.age0_Gyr == 2.
+
+def test_biosign_spectra():
+    from . import biosign
+    from .packets import BioSignFlux
+    from types import SimpleNamespace as NS
+    L = lambda f: {l["name"]: l["strength"] for l in biosign.build_lines(f)}
+    assert L(BioSignFlux(.21*.9/1.9))["o2_760"] > L(BioSignFlux(.21*.1/1.1))["o2_760"]          # more producers -> deeper O2
+    wet, dry = biosign.h2o_column(NS(liquid_water_frac=.8, T_K=290.)), biosign.h2o_column(NS(liquid_water_frac=.1, T_K=290.))
+    assert wet > dry > 0 and biosign.h2o_column(NS(liquid_water_frac=0., T_K=290.)) == 0
+    assert "tech_589" in L(BioSignFlux(tech=.5)) and "tech_589" not in L(BioSignFlux(o2=.1))
+    assert biosign.build_lines(BioSignFlux()) == []                                          # dry dead world
+    z = 2.
+    for l in biosign.observed(biosign.build_lines(BioSignFlux(.1, 1e-3, .5, .1, .3)), z): assert abs(l["obs_nm"] - 3*l["rest_nm"]) < 1e-9
+    # integration: cosmological observer at z=2 (lookback ~10 Gyr: emit at t, poll far in the future)
+    cat = radiation.ObserverCatalog([radiation.Observer("hiz", 10., z=z, aperture=10.)])
+    r = run_habitat(hab(1.), SUN, None, np.random.default_rng(1), 4000, 10., plant=True, culture=False, catalog=cat)
+    assert not cat.log; cat.poll(1e11); s = cat.summary()
+    assert "o2_760" in s["lines_detected"] and "h2o_1400" in s["lines_detected"]
+    d = cat.first_detection("o2_760"); l = [x for x in d["lines"] if x["name"] == "o2_760"][0]
+    assert abs(l["obs_nm"] - 760*3) < 1e-6 and any(abs(v.get("obs_nm", 0) - 2280) < 1e-6 for v in s["first"].values())
+    assert r["biosign"]["h2o"] > 0 and r["biosign"]["lines"]

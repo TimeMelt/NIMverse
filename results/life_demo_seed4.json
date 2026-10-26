@@ -1770,7 +1770,82 @@
     "o2": 0.10714941191481962,
     "ch4": 9.433121842767589e-05,
     "pigments": 0.5102352948324744,
-    "tech": 1.0
+    "tech": 1.0,
+    "h2o": 0.20190519240629315,
+    "lines": [
+     {
+      "name": "o2_760",
+      "species": "o2",
+      "rest_nm": 760.0,
+      "kind": "absorption",
+      "weight": 1.0,
+      "strength": 0.10714941191481962
+     },
+     {
+      "name": "o2_690",
+      "species": "o2",
+      "rest_nm": 690.0,
+      "kind": "absorption",
+      "weight": 0.4,
+      "strength": 0.04285976476592785
+     },
+     {
+      "name": "ch4_1650",
+      "species": "ch4",
+      "rest_nm": 1650.0,
+      "kind": "absorption",
+      "weight": 1.0,
+      "strength": 9.433121842767589e-05
+     },
+     {
+      "name": "ch4_2300",
+      "species": "ch4",
+      "rest_nm": 2300.0,
+      "kind": "absorption",
+      "weight": 0.7,
+      "strength": 6.603185289937312e-05
+     },
+     {
+      "name": "h2o_1400",
+      "species": "h2o",
+      "rest_nm": 1400.0,
+      "kind": "absorption",
+      "weight": 1.0,
+      "strength": 0.20190519240629315
+     },
+     {
+      "name": "h2o_1900",
+      "species": "h2o",
+      "rest_nm": 1900.0,
+      "kind": "absorption",
+      "weight": 0.8,
+      "strength": 0.16152415392503452
+     },
+     {
+      "name": "redge_720",
+      "species": "pigments",
+      "rest_nm": 720.0,
+      "kind": "continuum_step",
+      "weight": 1.0,
+      "strength": 0.5102352948324744
+     },
+     {
+      "name": "tech_589",
+      "species": "tech",
+      "rest_nm": 589.0,
+      "kind": "emission",
+      "weight": 1.0,
+      "strength": 1.0
+     },
+     {
+      "name": "tech_10um",
+      "species": "tech",
+      "rest_nm": 10000.0,
+      "kind": "ir_excess",
+      "weight": 0.6,
+      "strength": 0.6
+     }
+    ]
    },
    "host": {
     "M_star": 1.454444884457894,
@@ -36202,7 +36277,9 @@
     "o2": 0.0,
     "ch4": 0.0,
     "pigments": 0.0,
-    "tech": 0.0
+    "tech": 0.0,
+    "h2o": 0.0,
+    "lines": []
    },
    "host": {
     "M_star": 1.454444884457894,
@@ -36848,7 +36925,8 @@
      "o2": 0.02,
      "ch4": 0.0001,
      "pigments": 0.05,
-     "tech": 0.01
+     "tech": 0.01,
+     "h2o": 0.02
     },
     "aperture": 1.0
    }
@@ -36858,19 +36936,69 @@
   },
   "n_arrived": 800,
   "n_pending": 0,
-  "n_detections": 385,
+  "n_detections": 400,
   "first": {
+   "planet2:h2o": {
+    "t_emit": 0.0,
+    "t_arr": 32.6156,
+    "z": 0.0
+   },
+   "planet2:h2o_1400": {
+    "t_emit": 0.0,
+    "t_arr": 32.6156,
+    "z": 0.0,
+    "obs_nm": 1400.0
+   },
+   "planet2:h2o_1900": {
+    "t_emit": 0.0,
+    "t_arr": 32.6156,
+    "z": 0.0,
+    "obs_nm": 1900.0
+   },
    "planet2:o2": {
     "t_emit": 1500.0,
-    "t_arr": 1532.6156
+    "t_arr": 1532.6156,
+    "z": 0.0
    },
    "planet2:pigments": {
     "t_emit": 1500.0,
-    "t_arr": 1532.6156
+    "t_arr": 1532.6156,
+    "z": 0.0
+   },
+   "planet2:o2_760": {
+    "t_emit": 1500.0,
+    "t_arr": 1532.6156,
+    "z": 0.0,
+    "obs_nm": 760.0
+   },
+   "planet2:o2_690": {
+    "t_emit": 1500.0,
+    "t_arr": 1532.6156,
+    "z": 0.0,
+    "obs_nm": 690.0
+   },
+   "planet2:redge_720": {
+    "t_emit": 1500.0,
+    "t_arr": 1532.6156,
+    "z": 0.0,
+    "obs_nm": 720.0
    },
    "planet2:tech": {
     "t_emit": 3700.0,
-    "t_arr": 3732.6156
+    "t_arr": 3732.6156,
+    "z": 0.0
+   },
+   "planet2:tech_589": {
+    "t_emit": 3700.0,
+    "t_arr": 3732.6156,
+    "z": 0.0,
+    "obs_nm": 589.0
+   },
+   "planet2:tech_10um": {
+    "t_emit": 3700.0,
+    "t_arr": 3732.6156,
+    "z": 0.0,
+    "obs_nm": 10000.0
    }
   },
   "log_tail": [
@@ -36883,13 +37011,66 @@
     "detected": [
      "o2",
      "pigments",
-     "tech"
+     "tech",
+     "h2o",
+     "o2_760",
+     "o2_690",
+     "h2o_1400",
+     "h2o_1900",
+     "redge_720",
+     "tech_589",
+     "tech_10um"
+    ],
+    "lines": [
+     {
+      "name": "o2_760",
+      "rest_nm": 760.0,
+      "obs_nm": 760.0,
+      "strength": 0.10735900477861715
+     },
+     {
+      "name": "o2_690",
+      "rest_nm": 690.0,
+      "obs_nm": 690.0,
+      "strength": 0.04294360191144686
+     },
+     {
+      "name": "h2o_1400",
+      "rest_nm": 1400.0,
+      "obs_nm": 1400.0,
+      "strength": 0.20460099427328537
+     },
+     {
+      "name": "h2o_1900",
+      "rest_nm": 1900.0,
+      "obs_nm": 1900.0,
+      "strength": 0.16368079541862832
+     },
+     {
+      "name": "redge_720",
+      "rest_nm": 720.0,
+      "obs_nm": 720.0,
+      "strength": 0.5112333560886532
+     },
+     {
+      "name": "tech_589",
+      "rest_nm": 589.0,
+      "obs_nm": 589.0,
+      "strength": 1.0
+     },
+     {
+      "name": "tech_10um",
+      "rest_nm": 10000.0,
+      "obs_nm": 10000.0,
+      "strength": 0.6
+     }
     ],
     "flux": {
      "o2": 0.10735900477861715,
      "ch4": 9.467122110204622e-05,
      "pigments": 0.5112333560886532,
-     "tech": 1.0
+     "tech": 1.0,
+     "h2o": 0.20460099427328537
     }
    },
    {
@@ -36901,13 +37082,66 @@
     "detected": [
      "o2",
      "pigments",
-     "tech"
+     "tech",
+     "h2o",
+     "o2_760",
+     "o2_690",
+     "h2o_1400",
+     "h2o_1900",
+     "redge_720",
+     "tech_589",
+     "tech_10um"
+    ],
+    "lines": [
+     {
+      "name": "o2_760",
+      "rest_nm": 760.0,
+      "obs_nm": 760.0,
+      "strength": 0.10734584859126849
+     },
+     {
+      "name": "o2_690",
+      "rest_nm": 690.0,
+      "obs_nm": 690.0,
+      "strength": 0.0429383394365074
+     },
+     {
+      "name": "h2o_1400",
+      "rest_nm": 1400.0,
+      "obs_nm": 1400.0,
+      "strength": 0.20441078446496666
+     },
+     {
+      "name": "h2o_1900",
+      "rest_nm": 1900.0,
+      "obs_nm": 1900.0,
+      "strength": 0.16352862757197334
+     },
+     {
+      "name": "redge_720",
+      "rest_nm": 720.0,
+      "obs_nm": 720.0,
+      "strength": 0.511170707577469
+     },
+     {
+      "name": "tech_589",
+      "rest_nm": 589.0,
+      "obs_nm": 589.0,
+      "strength": 1.0
+     },
+     {
+      "name": "tech_10um",
+      "rest_nm": 10000.0,
+      "obs_nm": 10000.0,
+      "strength": 0.6
+     }
     ],
     "flux": {
      "o2": 0.10734584859126849,
      "ch4": 9.465098533440312e-05,
      "pigments": 0.511170707577469,
-     "tech": 1.0
+     "tech": 1.0,
+     "h2o": 0.20441078446496666
     }
    },
    {
@@ -36919,13 +37153,66 @@
     "detected": [
      "o2",
      "pigments",
-     "tech"
+     "tech",
+     "h2o",
+     "o2_760",
+     "o2_690",
+     "h2o_1400",
+     "h2o_1900",
+     "redge_720",
+     "tech_589",
+     "tech_10um"
+    ],
+    "lines": [
+     {
+      "name": "o2_760",
+      "rest_nm": 760.0,
+      "obs_nm": 760.0,
+      "strength": 0.10731630267579004
+     },
+     {
+      "name": "o2_690",
+      "rest_nm": 690.0,
+      "obs_nm": 690.0,
+      "strength": 0.04292652107031602
+     },
+     {
+      "name": "h2o_1400",
+      "rest_nm": 1400.0,
+      "obs_nm": 1400.0,
+      "strength": 0.20402324203425923
+     },
+     {
+      "name": "h2o_1900",
+      "rest_nm": 1900.0,
+      "obs_nm": 1900.0,
+      "strength": 0.1632185936274074
+     },
+     {
+      "name": "redge_720",
+      "rest_nm": 720.0,
+      "obs_nm": 720.0,
+      "strength": 0.5110300127418573
+     },
+     {
+      "name": "tech_589",
+      "rest_nm": 589.0,
+      "obs_nm": 589.0,
+      "strength": 1.0
+     },
+     {
+      "name": "tech_10um",
+      "rest_nm": 10000.0,
+      "obs_nm": 10000.0,
+      "strength": 0.6
+     }
     ],
     "flux": {
      "o2": 0.10731630267579004,
      "ch4": 9.460466646941701e-05,
      "pigments": 0.5110300127418573,
-     "tech": 1.0
+     "tech": 1.0,
+     "h2o": 0.20402324203425923
     }
    },
    {
@@ -36937,13 +37224,66 @@
     "detected": [
      "o2",
      "pigments",
-     "tech"
+     "tech",
+     "h2o",
+     "o2_760",
+     "o2_690",
+     "h2o_1400",
+     "h2o_1900",
+     "redge_720",
+     "tech_589",
+     "tech_10um"
+    ],
+    "lines": [
+     {
+      "name": "o2_760",
+      "rest_nm": 760.0,
+      "obs_nm": 760.0,
+      "strength": 0.1072711835218948
+     },
+     {
+      "name": "o2_690",
+      "rest_nm": 690.0,
+      "obs_nm": 690.0,
+      "strength": 0.04290847340875792
+     },
+     {
+      "name": "h2o_1400",
+      "rest_nm": 1400.0,
+      "obs_nm": 1400.0,
+      "strength": 0.2034405582838032
+     },
+     {
+      "name": "h2o_1900",
+      "rest_nm": 1900.0,
+      "obs_nm": 1900.0,
+      "strength": 0.16275244662704258
+     },
+     {
+      "name": "redge_720",
+      "rest_nm": 720.0,
+      "obs_nm": 720.0,
+      "strength": 0.5108151596280704
+     },
+     {
+      "name": "tech_589",
+      "rest_nm": 589.0,
+      "obs_nm": 589.0,
+      "strength": 1.0
+     },
+     {
+      "name": "tech_10um",
+      "rest_nm": 10000.0,
+      "obs_nm": 10000.0,
+      "strength": 0.6
+     }
     ],
     "flux": {
      "o2": 0.1072711835218948,
      "ch4": 9.452813107771684e-05,
      "pigments": 0.5108151596280704,
-     "tech": 1.0
+     "tech": 1.0,
+     "h2o": 0.2034405582838032
     }
    },
    {
@@ -36955,15 +37295,77 @@
     "detected": [
      "o2",
      "pigments",
-     "tech"
+     "tech",
+     "h2o",
+     "o2_760",
+     "o2_690",
+     "h2o_1400",
+     "h2o_1900",
+     "redge_720",
+     "tech_589",
+     "tech_10um"
+    ],
+    "lines": [
+     {
+      "name": "o2_760",
+      "rest_nm": 760.0,
+      "obs_nm": 760.0,
+      "strength": 0.10720997154896583
+     },
+     {
+      "name": "o2_690",
+      "rest_nm": 690.0,
+      "obs_nm": 690.0,
+      "strength": 0.04288398861958634
+     },
+     {
+      "name": "h2o_1400",
+      "rest_nm": 1400.0,
+      "obs_nm": 1400.0,
+      "strength": 0.20266357706743343
+     },
+     {
+      "name": "h2o_1900",
+      "rest_nm": 1900.0,
+      "obs_nm": 1900.0,
+      "strength": 0.16213086165394675
+     },
+     {
+      "name": "redge_720",
+      "rest_nm": 720.0,
+      "obs_nm": 720.0,
+      "strength": 0.5105236740426945
+     },
+     {
+      "name": "tech_589",
+      "rest_nm": 589.0,
+      "obs_nm": 589.0,
+      "strength": 1.0
+     },
+     {
+      "name": "tech_10um",
+      "rest_nm": 10000.0,
+      "obs_nm": 10000.0,
+      "strength": 0.6
+     }
     ],
     "flux": {
      "o2": 0.10720997154896583,
      "ch4": 9.442708578950379e-05,
      "pigments": 0.5105236740426945,
-     "tech": 1.0
+     "tech": 1.0,
+     "h2o": 0.20266357706743343
     }
    }
+  ],
+  "lines_detected": [
+   "h2o_1400",
+   "h2o_1900",
+   "o2_690",
+   "o2_760",
+   "redge_720",
+   "tech_10um",
+   "tech_589"
   ]
  }
 }

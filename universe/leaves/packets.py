@@ -104,7 +104,8 @@ class CreaturePacket(_P):
 @dataclass
 class BioSignFlux(_P):
     """Observable gases/pigments/tech markers; consumed by leaves.radiation observers."""
-    o2: float = 0.; ch4: float = 0.; pigments: float = 0.; tech: float = 0.
+    o2: float = 0.; ch4: float = 0.; pigments: float = 0.; tech: float = 0.; h2o: float = 0.
+    lines: list = field(default_factory=list)   # spectral features (leaves.biosign.build_lines), rest_nm + strength
 
 @dataclass
 class LifeParamBus(_P):
