@@ -115,3 +115,21 @@ New knobs: `sex_rate`, `climate_drift`, `impact_refuge`.
 - Cold floor: polymer chemistry works down to 240 K (eutectic brines; `chemistry.T_BRINE`, was 250 K) → cold ocean worlds like seed 7 become abiogenesis-ready.
 - Seed scan (40 kyr, dt 20, defaults): life on 4, 6, 8 of seeds 0–9 and 12 of 10–19 (4/20). The rest have no candidate wet world: frozen (no liquid water, 190–245 K: seeds 1, 5, 10, 11, 15), dry deserts (water < .1 or organics below threshold) or gas giants only; seed 7's 247 K ocean is now ready but p≈5e-4/step did not fire in 40 kyr.
 - `viewer_life_shots` copies all stills (01–06) into `results/`.
+
+## Planet gen + abiogenesis (imperfection fixes 4)
+
+Seed scan 0–19 (40 kyr, dt 20, defaults): **4/20 → 12/20** with life.
+
+| | seeds with life |
+|---|---|
+| before (baafe50) | 4, 6, 8, 12 |
+| after | 3, 4, 6, 7, 8, 12, 13, 14, 15, 16, 17, 19 (new: 3, 7, 13, 14, 15, 16, 17, 19; 6, 7, 8, 12 now have two living worlds) |
+
+- Deserts: `system_habitat.VOLATILES["desert"]` .1 → .35 (groundwater / playa lakes; draw .25–.45) so inner-edge deserts reach w ≈ .3–.65 and enough C/N for organics. `bodies.classify` and gallery looks unchanged.
+- Candidate margin .25 → .35 (rocky worlds at ≥ .65·hz_in, typical hot-desert orbits at .66–.71·hz_in, 320–345 K, below runaway).
+- `organic_thresh` default .275 → .18 (sparse-volatile deserts top out at organics ≈ .8·volatiles).
+- Cold: `snowball_K` default 245 → 238; polymer chemistry tests T_BRINE (240 K, unchanged) against the warm-season temperature `T + season_K` (equatorial/summer brines), mean T still bounds the hot side.
+- Abiogenesis: `abio_p` 2e-4 → 4e-4/yr, scaled by `min(1, 2·w)` (was `w`): a w = .1 ready world fires within 40 kyr with p ≈ .96. Not-ready → never (unchanged).
+- Leftovers: 1, 5, 16(outer), 17(outer) ice worlds are 187–199 K (true snowballs, kept sterile); 10 (238 K ocean) and 11 (232 K terran) stay below brine water thresholds; 0, 2, 9, 18 have no rocky world within the widened HZ margin (gas giants / far ice).
+- seed 4 @ 40 kyr: life (abiogenesis t = 1480 yr, was 4780), min pop 117 (was 126), metabolism 2nd half .53 (was .53), no extinction; 7 species alive at end.
+- Tests: `test_desert_near_hz_reaches_polymer_ready`, `test_abiogenesis_fires_when_ready_40kyr` (200 rng seeds, ≥90%), `test_multiseed_ready_proxy` (≥10/20 seeds have a polymer+vesicle-ready candidate; ice worlds stay sterile).

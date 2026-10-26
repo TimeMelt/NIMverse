@@ -3,7 +3,7 @@ import numpy as np
 from ..bodies import lum, classify, body_rng, EARTH
 from .packets import HabitatState
 
-VOLATILES = {"terran": .5, "ocean": .9, "desert": .1, "ice": .8, "lava": .02, "gas giant": 1., "ice giant": 1.}
+VOLATILES = {"terran": .5, "ocean": .9, "desert": .35, "ice": .8, "lava": .02, "gas giant": 1., "ice giant": 1.}
 
 def system_luminosity(S): return float(sum(lum(float(m)) for m, k in zip(S["m"], S["kind"]) if k == 0))
 
@@ -30,5 +30,5 @@ def habitats_from_system(S, seed, LP=None, rng="numpy"):
 
 def is_rocky(h): return h.m/EARTH <= 12
 
-def candidate(h, margin=.25):
+def candidate(h, margin=.35):
     return is_rocky(h) and (1-margin)*h.hz_in <= h.a <= (1+margin)*h.hz_out

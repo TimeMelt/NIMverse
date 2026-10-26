@@ -19,7 +19,8 @@ def step(chem, climate, hw, LP=None, dt_w_yr=1.):
     d = make - decay
     for k, c in STOICH.items(): s[k] = max(0., s[k] - c*d)
     s["organics"] = max(0., s["organics"] + d)
-    pr = bool(w > .05 and T_BRINE < climate.T_K < 373. and s["organics"] > P["organic_thresh"])
+    Tw = climate.T_K + float(climate.stressors.get("season_K", 0.)) if climate.stressors else climate.T_K   # warm-season/equatorial brines
+    pr = bool(w > .05 and T_BRINE < Tw and climate.T_K < 373. and s["organics"] > P["organic_thresh"])
     vr = bool(pr and s["P"] > .01 and w > .1)
     return ChemInventory(s, float(chem.redox - .1*d), pr, vr)
 
@@ -27,7 +28,7 @@ def abiogenesis_roll(chem, climate, LP, rng, t_w=0., dt_w_yr=1., gate=None):
     P = as_bus(LP); g = gate or AbiogenesisGate()
     if g.fired: return g
     ready = chem.polymer_ready and chem.vesicle_ready and climate.liquid_water_frac > 0
-    p = float(1 - (1 - P["abio_p"]*climate.liquid_water_frac)**dt_w_yr) if ready else 0.
+    p = float(1 - (1 - P["abio_p"]*min(1., 2.*climate.liquid_water_frac))**dt_w_yr) if ready else 0.   # saturates at w>=.5 (shorelines/brine pockets suffice)
     fired = bool(p > 0 and rng.random() < p)
     return AbiogenesisGate(p, fired, float(t_w) if fired else -1.)
 

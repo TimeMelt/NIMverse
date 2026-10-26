@@ -222,6 +222,58 @@ def test_brine_cold_floor():
     assert C.step(ch, ClimateStress(245., .3, "cold"), HW()).polymer_ready
     assert not C.step(ch, ClimateStress(230., .3, "cold"), HW()).polymer_ready
 
+# ---- planet gen + abiogenesis widening ----
+def _scan_ready(seeds=range(20), steps=2000, dt=20.):
+    import importlib
+    from ..sim2 import make_system, DEFAULTS
+    from . import world, chemistry
+    from .system_habitat import habitats_from_system, candidate
+    LL = importlib.import_module("universe.leaves.life_loop")
+    C = json.load(open(os.path.join(os.path.dirname(__file__), "..", "config3.json"))); C = {**C, "asteroids": C.get("eval", {}).get("asteroids", 40)}
+    out = {}
+    for sd in seeds:
+        S = make_system(np.random.default_rng(sd), C, DEFAULTS); hw = LL.host_weather(S); out[sd] = []
+        for h in habitats_from_system(S, sd):
+            if not candidate(h): continue
+            cl = world.step(h, hw, None); ch = chemistry.init_chem(h)
+            for _ in range(steps): ch = chemistry.step(ch, cl, hw, None, dt)
+            out[sd].append((h.ptype, cl.T_K, cl.liquid_water_frac, ch.polymer_ready and ch.vesicle_ready))
+    return out
+
+def test_desert_near_hz_reaches_polymer_ready():
+    from . import world, chemistry
+    from .system_habitat import VOLATILES
+    from .packets import HabitatState
+    class HW: L_star = 1.; uv_proxy = 1.; flare_rate = 0.
+    for u in (0., .5, 1.):                                            # whole volatile draw range .7-1.3 x desert
+        v = VOLATILES["desert"]*(.7+.6*u)
+        h = HabitatState(0, "d", 3e-6, .85, 0., 1., .3, 1., .95, 1.67, False, "desert", v, 0., 1.)
+        cl = world.step(h, HW()); assert 273 < cl.T_K < 340 and cl.liquid_water_frac > .1, (cl.T_K, cl.liquid_water_frac)
+        ch = chemistry.init_chem(h)
+        for _ in range(2000): ch = chemistry.step(ch, cl, HW(), None, 20.)
+        assert ch.polymer_ready and ch.vesicle_ready, (v, ch.species["organics"])
+
+def test_abiogenesis_fires_when_ready_40kyr():
+    from . import chemistry as C
+    from .packets import ChemInventory
+    ch = ChemInventory(dict(C=1, H=4, O=2, N=.5, P=.05, S=.1, organics=1.), 0., True, True)
+    cl = ClimateStress(250., .1, "cold")                              # sparse brine world (seed-7 style), w just at vesicle threshold
+    fired = 0
+    for sd in range(200):
+        r = np.random.default_rng(sd); g = None
+        for k in range(2000):
+            g = C.abiogenesis_roll(ch, cl, None, r, k*20., 20., g)
+            if g.fired: fired += 1; break
+    assert fired >= .9*200, fired                                     # analytic: 1-exp(-4e-4*.2*40000) = .96
+    nr = ChemInventory(ch.species, 0., False, False); r = np.random.default_rng(0)
+    assert not any(C.abiogenesis_roll(nr, cl, None, r, 0., 20.).fired for _ in range(5000))   # not ready -> never
+
+def test_multiseed_ready_proxy():
+    rd = _scan_ready()
+    n = sum(any(x[3] for x in v) for v in rd.values())
+    assert n >= 10, {k: v for k, v in rd.items()}                     # full 40 kyr scan: 12/20 with life (README)
+    assert not any(x[3] for v in rd.values() for x in v if x[0] == "ice"), "snowballs must stay sterile"
+
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"): f(); print("ok", k)

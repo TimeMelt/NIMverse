@@ -22,7 +22,7 @@ LIFE_SPACE = {
     "tech_rate": (0., 1e-2), "tech_threshold": (.1, 2.),
 }
 LIFE_DEFAULTS = {k: (lo+hi)/2 for k, (lo, hi) in LIFE_SPACE.items()}
-LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=2e-4, flare_rate_mult=1., flare_amp=2., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5,
+LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=4e-4, snowball_K=238., organic_thresh=.18, flare_rate_mult=1., flare_amp=2., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5,
                      evolution_rate=1., pop_cap=300., sel_strength=1., speciation_dist=.4,
                      sex_rate=.3, climate_drift=.5, impact_refuge=.05)
 TRAITS = ("metabolism_eff", "mobility", "reproduction_rate", "hardiness")
