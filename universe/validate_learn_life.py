@@ -7,7 +7,10 @@ C = {**json.load(open(os.path.join(os.path.dirname(__file__), "config3.json"))),
 def main():
     L = json.load(open(os.path.join(R, "learned_life.json"))); P = {**LIFE_DEFAULTS, **L["params"]}
     train = L["seeds"]; held = [0, 1, 2, 5, 9, 10, 11, 14, 101, 102]; out = {}
-    for name, PP in (("defaults", LIFE_DEFAULTS), ("learned", P)):
+    runs = [("defaults", LIFE_DEFAULTS), ("learned", P)]
+    prev = os.path.join(R, "learned_life_prev_impactoff.json")      # 2026-10 run that drove impact_scale -> ~0 (for comparison)
+    if os.path.exists(prev): runs.append(("prev_impactoff", {**LIFE_DEFAULTS, **json.load(open(prev))["params"]}))
+    for name, PP in runs:
         for tag, ss in (("train", train), ("held", held)):
             f, p, per = loss(PP, ss, C, L["years"], 10., detail=True)
             out[f"{name}/{tag}"] = dict(loss=f, hab=p[0], eco=p[1], rec=p[2], ext=p[3], n_ext=sum(v["ext"] >= 1 for v in per.values()), per=per)

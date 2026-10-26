@@ -19,7 +19,7 @@ LIFE_SPACE = {
     # stellar evolution: initial MS age (Gyr), dL/dt scale (1 = real rate), time compression (stellar Gyr per world Gyr)
     "stellar_age_Gyr": (.05, 12.), "stellar_evolve": (0., 1.), "stellar_age_rate": (1., 1e6),
     # impacts (scale on HabitatState.impact_flux; kill = biomass fraction lost per unit shock)
-    "impact_scale": (0., 20.), "impact_kill": (0., 1.),
+    "impact_scale": (.25, 20.), "impact_kill": (0., 1.),
     # culture / tech
     "tech_rate": (0., 1e-2), "tech_threshold": (.1, 2.),
     # culture <-> biosphere coupling: biomass/yr drawn at level 1, pollution stock at level 1, K warming per unit pollution

@@ -14,7 +14,9 @@ from .leaves import world
 
 KEYS = list(LIFE_SPACE); LO = np.array([LIFE_SPACE[k][0] for k in KEYS]); HI = np.array([LIFE_SPACE[k][1] for k in KEYS])
 W_EXT = 2.0; POP_THRESH = 10
-DEFAULT_FREEZE = "stellar_evolve,stellar_age_Gyr,stellar_age_rate,tech_*"
+DEFAULT_FREEZE = "stellar_evolve,stellar_age_Gyr,stellar_age_rate,tech_*,impact_scale,impact_kill"
+# impacts frozen at LIFE_DEFAULTS (impact_scale=1, impact_kill=.5): the 2026-10 run drove impact_scale->~0 to dodge
+# extinctions (unphysical).  LIFE_SPACE also floors impact_scale at .25 so even --freeze '' cannot switch impacts off.
 def decode(u): return {k: float(v) for k, v in zip(KEYS, LO + np.clip(u, 0, 1)*(HI-LO))}
 def encode(P): return np.array([(P[k]-LIFE_SPACE[k][0])/(LIFE_SPACE[k][1]-LIFE_SPACE[k][0]) for k in KEYS])
 def freeze_mask(spec):
@@ -30,12 +32,20 @@ def extinction(r):
         return 0.5*max(0., 1 - min(ns or [POP_THRESH])/POP_THRESH)
     return 0. if r["biosphere"].get("alive", True) else 1.
 
+_REF = LifeParamBus(LIFE_DEFAULTS)
+def plantable(cands, hw):
+    """Drop candidates that are outside the HZ AND have no liquid water under the fixed LIFE_DEFAULTS climate
+    (e.g. seed 4 planet3: 187 K ice, a=4.4 > hz_out 3.53 but inside the 35% candidate margin).  Planting there is a
+    guaranteed death independent of the trained params, so it only adds a constant (or rewards greenhouse cheats).
+    The reference is LIFE_DEFAULTS, not P, so the filter cannot be optimized."""
+    return [h for h in cands if h.in_hz or world.step(h, hw, _REF).liquid_water_frac > 0]
+
 def loss(P, seeds, C, years, dt, model="individuals", culture=False, detail=False):
     LP = LifeParamBus(P); L = []; parts = []; per = {}
     for s in seeds:
         S = make_system(np.random.default_rng(s), C, DEFAULTS); hw = host_weather(S); habs = habitats_from_system(S, s, LP)
         hab = abs(ScoreBus.habitability([world.step(h, hw, LP) for h in habs]))
-        cands = [h for h in habs if candidate(h)] or sorted(habs, key=lambda h: abs(np.log(h.a/np.sqrt(h.hz_in*h.hz_out))))[:1]
+        cands = plantable([h for h in habs if candidate(h)], hw) or sorted(habs, key=lambda h: abs(np.log(h.a/np.sqrt(h.hz_in*h.hz_out))))[:1]
         rng = np.random.default_rng(1000+s); eco = rec = ext = 0.; mins = []; sp = 0
         for h in cands:
             r = run_habitat(h, hw, LP, rng, years, dt, plant=True, disturb_at=years/2, culture=culture, model=model)

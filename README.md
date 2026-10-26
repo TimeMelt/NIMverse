@@ -317,3 +317,20 @@ Top param deltas vs LIFE_DEFAULTS: impact_scale 1 → 0.043 (−96%), reproducti
 **LIFE_DEFAULTS were NOT overwritten**: the learned set ships as `results/learned_life.json` (merge with `{**LIFE_DEFAULTS, **params}`), because seed‑4 20 kyr is marginally worse.
 
 Leftovers: QrnLOpt optimizer skipped (SPSA only); training on full seeds 0–19 is still expensive; **impact_scale drifted to ~0** — the optimizer is effectively switching off impacts to avoid extinctions, which is physically unrealistic and should be bounded/frozen in a future run; seed 4 still goes extinct at 20 kyr under both sets.
+
+### learn_life leftovers closed
+- **Impacts frozen on.** `DEFAULT_FREEZE` = `stellar_evolve,stellar_age_Gyr,stellar_age_rate,tech_*,impact_scale,impact_kill`, so impacts stay at LIFE_DEFAULTS (scale 1, kill .5). The LIFE_SPACE floor for `impact_scale` went from 0 to **0.25**, so even `--freeze ''` cannot switch impacts off. `test_impacts_frozen_and_floored` checks the mask, the floor, and that a masked update holds both keys at their defaults.
+- **Seed 4 @ 20 kyr root cause.** It was not the disturbance or impacts. Seed 4 has two "candidates": planet2 (HZ ocean, 264 K) and planet3 (a=4.40 AU, outside hz_out=3.53 but inside the 35% candidate margin; 187 K ice, liquid water 0). Planted life on planet3 dies every time, regardless of parameters, so rec/ext was stuck at 0.5. The planet2 run is healthy at 20 kyr with or without the 80% disturbance, impacts, flares or drift. Fix: `learn_life.plantable()` drops candidates that are outside the HZ **and** have zero liquid water under the *fixed* LIFE_DEFAULTS climate. Because the filter uses defaults, it cannot be optimized: no greenhouse cheat is possible. Physics is unchanged, and the disturbance fraction and impact_refuge are untouched.
+- **Train set widened** to `3,4,6,7,8,12,13,16,17,100`. Seeds 16 and 17 were checked as life-bearing: ext 0, min_pop 40 at 2 kyr. Seed 15 was skipped (hab .45).
+- **Retrain:** `python -m universe.learn_life --iters 28 --years 4000 --seed-list 3,4,6,7,8,12,13,16,17,100` took 29 min, loss 0.1817 → **0.1752** (best at it≤10). Gains are small: once the unwinnable ice candidate is gone, defaults are already near the optimum with impacts on. Results are in `results/learned_life.json`/`.log`/`_loss.png`. The previous impact-off params are kept as `results/learned_life_prev_impactoff.json` for comparison.
+- **Validation** (`python -m universe.validate_learn_life`, held = 0,1,2,5,9,10,11,14,101,102):
+
+| set | train loss | held loss (n_ext) | seed4_20k rec/ext (min_pop) | seed4_culture ext |
+|---|---|---|---|---|
+| defaults | 0.1815 | 0.7431 (1) | 0/0 (40) | 0 |
+| learned (impacts on) | 0.1752 | 0.7395 (1) | 0/0 (40), loss .199 | 0 |
+| prev impact-off | 0.1705 | 0.7942 (1) | 0/0 (40), loss .284 | 0 |
+
+  The one held-out extinction under all sets is seed 11. Before the plantable filter, the old table read defaults held 1.95 (3 ext) and seed4_20k rec/ext .5. The learned set with impacts on beats the impact-off cheat on held-out data and on seed4_20k. LIFE_DEFAULTS are **not** overwritten because the margin is too small. Use `--params results/learned_life.json` to opt in.
+- **QrnLOpt** stays skipped on purpose. The pennylane/QrnLOpt meshes cost seconds per eval, while each SPSA loss here is about 20 s of multi-seed 4 kyr runs, so it is too heavy for the inner loop and is not wired in.
+- Still open: held-out seed 11 extinction; full 0–19 training (still expensive, about 1 min/iter for 10 seeds).
