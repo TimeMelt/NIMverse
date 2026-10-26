@@ -184,3 +184,16 @@ The four leftovers from the pass above are now covered (all toy-level):
 - **Seed 4 @ 40 kyr:** every life/biosphere field is identical (biosign only gains `h2o` and `lines`). Detections went from 385 to 400, because H₂O is visible from t=0, before life. Lines detected: o2_760, o2_690, h2o_1400, h2o_1900, redge_720, tech_589, tech_10um. CH₄ stays below threshold (9.4e-5 < 1e-4), as before.
 - **Test:** `test_biosign_spectra` checks O₂ vs producers, H₂O vs wetness, tech lines, empty lines on a dead world, and obs_nm = 3·rest at z=2. It also runs an integration case with a z=2 observer, where o2_760 is detected at 2280 nm.
 - **Leftovers:** no full RT, no line profiles or continuum shape, no instrument noise or S/N, no retrieval, no stellar-type contrast scaling (host `uv_bands` not folded in), and no false-positive (abiotic O₂) modelling.
+
+## Culture ↔ biosphere coupling (improvement item 4)
+
+`leaves/culture.py` v2: tech is no longer a free logistic marker — it eats, pollutes, warms and can kill.
+
+- **Resource draw**: active tech demands `tech_draw × level` biomass/yr from producers (capped at 50% of P per step). `supply = taken/demand` scales logistic growth; `supply < .5` makes `level` contract (overshoot → stall/crash). `footprint = taken/P` trims the *next* step's `NicheOffer.resources` for organisms.
+- **Pollution / climate**: a pollution stock relaxes toward `level × tech_pollute` (e-fold 500 yr, persists after collapse). Next step it is fed into `world.step` stress as `dT += tech_warm_K × pollution` (plus `tech_dT`, `tech_pollution` stressors), so `ClimateHistory` T/water carry the tech trend.
+- **Extinction risk**: toxicity `tech_kill = .4 × max(0, pollution − .3) × dt/20` (≤ .5/step) is applied like `uv_kill` to biomass guilds and as an individual shock kill. Organisms crashing → culture decays (existing rule) → pollution relaxes.
+- **Order**: biosphere → organisms → culture.step → draw applied to producers same step; warming/toxicity/niche footprint applied on the next step (one-step lag, documented in `life_loop`). `--no-culture` disables everything.
+- **Knobs** (LIFE_SPACE): `tech_draw` (0–.5, default .001; .003 + warming tipped the seed-4 metabolism-stability test, chaotic sensitivity), `tech_pollute` (0–2, default .1), `tech_warm_K` (0–60, default 5). `Culture.to_dict` adds `pollution, draw, footprint, supply, warm_K, tech_kill`; run report `culture.peak`; record rows add `tech_dT, pollution`.
+- **Seed 4, 40 kyr** (planet2, before c048813 → after): tech 1.0 → 1.0 (t_start 3640 both); tech warming 0 → +0.5 K (pollution .10, no toxicity); T_mean 263.62 → 264.07 K, T_end 267.01 → 267.51 K; min pop 117 → 119, end pop 202 → 206; metabolism mean (t>3 kyr) .549 → .562 (end .536 → .635); biomass 1.139 → 1.124; peak footprint .063; no extinction.
+- **Test** `test_culture_biosphere_coupling`: draw lowers P, starved tech contracts; `tech_pollute=1, tech_warm_K=30` → T_max > control +5 K; `tech_pollute=2, tech_warm_K=60, tech_draw=.5` → toxicity, biomass crash, lower final tech.
+- **Leftovers**: single global civilisation (no politics / multi-polity / war), no industry sectors or energy mix, no aerosol cooling or ocean acidification chemistry, no tech-driven chem organics/redox, no mitigation/learning response.

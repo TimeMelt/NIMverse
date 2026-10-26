@@ -1,6 +1,6 @@
 """Orchestrator: nested world-time t_w under a frozen system snapshot.
 For each HZ/near-HZ rocky habitat: HostWeather(flares) -> impacts -> world (+history) -> chemistry -> abiogenesis gate
--> biosphere -> organisms -> culture (optional) -> BioSignFlux -> radiation observers (light-time delayed)."""
+-> biosphere -> organisms -> culture (optional; draws producers same step, pollution warming/toxicity fed to the NEXT step's world/bio/organisms) -> BioSignFlux -> radiation observers (light-time delayed)."""
 import copy, numpy as np
 from ..bodies import lum, temp
 from . import stellar, world, chemistry, biosphere, organisms, individuals, culture as culture_mod
@@ -33,7 +33,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
     drng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 11])        # own stream: drift does not perturb the main rng draws
     orng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 23])        # own stream for organisms: life draws never shift impacts/abiogenesis timing
     drift = world.ClimateDrift(P["climate_drift"], drng) if P["climate_drift"] > 0 else None
-    hist = world.ClimateHistory(n=4000); cu = culture_mod.Culture(); kill_tot = 0.; n_imp = 0; impact_loss = 0.
+    hist = world.ClimateHistory(n=4000); cu = culture_mod.Culture(); tstress = {}; peak = {}; kill_tot = 0.; n_imp = 0; impact_loss = 0.
     for k in range(int(years/dt)):
         t = k*dt; dist = 0.
         if disturb_at is not None and abs(t - disturb_at) < dt/2: dist = .8
@@ -41,6 +41,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         stress = {"dT": 0.}; imp = world.impacts(h, P, rng, dt)
         if drift is not None: stress.update(drift.step(t, dt, drng))          # planetary climate drift (T, water, class, stress)
         stress.update({k: v for k, v in imp.items() if k != "dT"}); stress["dT"] += imp.get("dT", 0.); stress["impact_dT"] = imp.get("dT", 0.)
+        if tstress: stress.update(tstress); stress["dT"] += tstress["tech_dT"]       # previous step's tech feedback
         clim = world.step(h, hw, P, dt, stress); hist.push(t, clim)
         if stress["impact_dT"]:      # impact winter freezes water briefly: the shock is the kill, chronic stress uses pre-impact water
             clim.stressors["water_chronic"] = world.step(h, hw, P, dt, dict(stress, dT=stress["dT"] - stress["impact_dT"])).liquid_water_frac
@@ -48,6 +49,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         gate = chemistry.abiogenesis_roll(chem, clim, P, rng, t, dt, gate)
         bio = biosphere.seed(bio, gate); m0 = bio.total()
         bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist)
+        if tstress.get("tech_footprint"): niche.resources = float(niche.resources*(1 - min(tstress["tech_footprint"], 1.)))   # last step's draw
         if clim.stressors.get("impacts"): n_imp += clim.stressors["impacts"]; impact_loss += m0*clim.stressors["impact_kill"]
         if model == "individuals":
             if bio.alive and t >= organisms_after and pop is None and bio.P > .05: pop = individuals.found(P, orng, n_founders, t)
@@ -58,14 +60,17 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
         if coh and model != "individuals":
             coh, pkt = organisms.step(coh, niche, clim, P, rng, dt); bio = biosphere.apply_creatures(bio, pkt)
         elif not coh and pkt is not None and pkt.n > 0: pkt = None
-        if culture: cu = culture_mod.step(cu, bio, pkt if coh else None, P, rng, t, dt, culture_min_age); flux.tech = float(cu.level); biosign.attach(flux)
+        if culture:
+            cu = culture_mod.step(cu, bio, pkt if coh else None, P, rng, t, dt, culture_min_age); flux.tech = float(cu.level); biosign.attach(flux)
+            bio = culture_mod.apply(bio, cu); tstress = culture_mod.stress(cu)
+            tstress["tech_footprint"] = cu.footprint; peak = {k: max(peak.get(k, 0.), v) for k, v in tstress.items()}
         if catalog is not None:
             if k % emit_every == 0: catalog.emit(t, h.name, flux)
             catalog.poll(t)
         series.append(bio.total())
         if record is not None:
             record(dict(planet=h.name, t_w=float(t), T=float(clim.T_K), drift=float(clim.stressors.get("drift_offset", 0.)), water=float(clim.liquid_water_frac), biomass=float(bio.total()),
-                        alive=bool(bio.alive), o2=float(flux.o2), ch4=float(flux.ch4), pigments=float(flux.pigments), tech=float(flux.tech),
+                        alive=bool(bio.alive), o2=float(flux.o2), ch4=float(flux.ch4), pigments=float(flux.pigments), tech=float(flux.tech), tech_dT=float(tstress.get("tech_dT", 0.)), pollution=float(tstress.get("tech_pollution", 0.)),
                         n_org=float(pkt.n) if (coh and pkt is not None) else 0., impacts=int(n_imp),
                         trait_means=(dict(pkt.trait_means) if (coh and pkt is not None) else {})))
     if pop is not None and (not pop.series or pop.series[-1]["t_w"] < pop.t): pop.series.append(pop.stats())
@@ -77,7 +82,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
     return dict(habitat=h.to_dict(), climate=clim.to_dict(), climate_history=hist.summary(), chem=chem.to_dict(), gate=gate.to_dict(),
                 biosphere=bio.to_dict(), biomass=float(bio.total()), biosign=flux.to_dict(), host=hw.summary(),
                 impacts=dict(events=int(n_imp), biomass_lost=float(impact_loss), rate_per_kyr=float(h.impact_flux*P["impact_scale"])),
-                culture=cu.to_dict() if culture else None, tech=float(flux.tech),
+                culture=dict(cu.to_dict(), peak=peak) if culture else None, tech=float(flux.tech),
                 creatures=pkt.to_dict() if pkt else None, organism_model=model,
                 individuals=(evo or {}).get("individuals"), evolution=({k: v for k, v in evo.items() if k != "individuals"} if evo else None), biomass_series=[float(x) for x in series[::max(1, len(series)//50)]],
                 score=dict(eco_stability=ScoreBus.eco_stability(series), planted_life=ScoreBus.planted_life(bio.alive)))

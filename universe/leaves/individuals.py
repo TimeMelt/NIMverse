@@ -146,7 +146,7 @@ def climate_stress(climate):
     return float(WATER_W*(1 - w) + abs(T - 293.)/80.)
 
 def shock_kill(climate):
-    st = climate.stressors or {}; return float(1 - (1 - min(st.get("impact_kill", 0.), 1.))*(1 - min(st.get("uv_kill", 0.), 1.)))
+    st = climate.stressors or {}; return float(1 - (1 - min(st.get("impact_kill", 0.), 1.))*(1 - min(st.get("uv_kill", 0.), 1.))*(1 - min(st.get("tech_kill", 0.), 1.)))
 
 def env_drift(pop, P, rng, dt, climate=None):
     """Multi-millennial nonstationarity felt by organisms: two incommensurate cycles (8.3 & 21 kyr) + rare telegraph flips

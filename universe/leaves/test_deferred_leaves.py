@@ -61,6 +61,30 @@ def test_culture():
     assert rr["tech"] > 0 and rr["biosign"]["tech"] == rr["tech"]
     assert run_habitat(h, SUN, LP, np.random.default_rng(2), 20000, 20., plant=True, culture=False)["tech"] == 0
 
+def test_culture_biosphere_coupling():
+    """Item 4: tech draws producers, pollutes -> warms climate (ClimateHistory), extreme knobs -> die-off + culture decay."""
+    from .biosphere import Biosphere
+    r = np.random.default_rng(0); pk = CreaturePacket(n=10.); big = Biosphere(1., .2, .1, True, 3.)
+    c = culture.Culture(active=True, level=.8, t_start=0., org_age=2000.)
+    c = culture.step(c, big, pk, LifeParamBus({"tech_draw": .05}), r, 0., 10.)
+    assert c.draw > 0 and culture.apply(big, c).P < big.P and c.footprint > 0         # resource draw
+    starved = culture.step(culture.Culture(active=True, level=.8, org_age=2000.), Biosphere(.01, 0, 0, True, 3.), pk, LifeParamBus({"tech_draw": .5}), r, 0., 10.)
+    assert starved.supply < .5 and starved.level < .8                                  # overshoot: industry contracts
+    off = culture.step(culture.Culture(active=True, level=.8, org_age=2000.), big, pk, LifeParamBus({"tech_draw": 0.}), r, 0., 10.)
+    assert off.draw == 0
+    base = dict(tech_rate=1e-2, tech_threshold=.1)
+    def run(**k): return run_habitat(hab(1.), SUN, LifeParamBus(dict(base, **k)), np.random.default_rng(2), 20000, 20., plant=True)
+    ctl, hot = run(tech_pollute=0., tech_warm_K=0., tech_draw=0.), run(tech_pollute=1., tech_warm_K=30.)
+    assert ctl["tech"] > 0 and hot["culture"]["peak"]["tech_dT"] > 5
+    assert hot["climate_history"]["T_max"] > ctl["climate_history"]["T_max"] + 5        # tech-driven warming
+    tail = lambda r: np.mean([x[1] for x in r["climate_history"]["tail"]])
+    assert tail(hot) > tail(ctl)
+    # collapse: extreme toxicity + draw crash organisms / biomass, culture then decays
+    ext = run(tech_pollute=2., tech_warm_K=60., tech_draw=.5)
+    assert ext["culture"]["peak"]["tech_kill"] > .1
+    assert min(ext["biomass_series"]) < .5*max(ctl["biomass_series"])
+    assert ext["tech"] < ctl["tech"]
+
 def test_cosmology_strong_field():
     assert abs(cosmology.a_of_t(cosmology.age_gyr()) - 1) < 1e-9 and 13 < cosmology.age_gyr() < 14.5
     assert cosmology.a_of_t(1.) < cosmology.a_of_t(5.) < 1 and abs(cosmology.hubble_velocity(10.) - 677.) < 1

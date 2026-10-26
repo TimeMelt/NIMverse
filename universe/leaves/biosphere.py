@@ -21,7 +21,7 @@ def seed(bio, gate, amount=1e-3):
 def step(bio, climate, chem, LP=None, dt_w_yr=1., disturbance=0.):
     """Returns (bio, NicheOffer, BioSignFlux). disturbance in [0,1] kills that biomass fraction."""
     P_ = as_bus(LP); K = capacity(climate, chem); b = Biosphere(**bio.to_dict()); st = climate.stressors or {}
-    disturbance = 1 - (1-min(disturbance, 1.))*(1-st.get("impact_kill", 0.))*(1-st.get("uv_kill", 0.))   # ClimateStress shocks
+    disturbance = 1 - (1-min(disturbance, 1.))*(1-st.get("impact_kill", 0.))*(1-st.get("uv_kill", 0.))*(1-st.get("tech_kill", 0.))   # ClimateStress shocks
     if disturbance: f = 1-min(disturbance, 1.); b.P, b.C, b.D = b.P*f, b.C*f, b.D*f
     if b.alive:
         g, s, dth = P_["eco_growth"], P_["eco_stiffness"], P_["eco_death"]
