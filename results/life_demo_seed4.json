@@ -37269,6 +37269,7 @@
   "delay_yr": {
    "obs0": 32.6156
   },
+  "cosmology": {},
   "n_arrived": 800,
   "n_pending": 0,
   "n_detections": 400,

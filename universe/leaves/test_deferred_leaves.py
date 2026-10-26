@@ -251,3 +251,20 @@ def test_culture_leftovers_closed():
     assert mit.mitigation > .3 and nom.mitigation == 0 and mit.energy_mix["fossil"] < nom.energy_mix["fossil"]
     assert mit.pollution < nom.pollution and mit.acidification < nom.acidification
     calm = roll(300, tech_pollute=.05); assert calm.mitigation == 0                                             # no crisis -> stays low
+
+def test_cosmo_strong_field_wiring():
+    """Item 6: cosmology -> observers, strong-field -> TDE/AGN fidelity."""
+    o = radiation.Observer.from_z(1.)
+    assert abs(o.distance_pc*2/1e6 - cosmology.lum_dist_mpc(1.)) < 1e-6 and abs(o.delay() - cosmology.lookback_gyr(1.)*1e9) < 1
+    c = o.cosmology(); assert c["z"] == 1. and abs(c["a"] - .5) < 1e-12 and c["H"] > cosmology.H0 and abs(c["d_L_mpc"] - c["d_L_obs_mpc"]) < 1e-6
+    assert abs(radiation.dimming(o.distance_pc, 1.) - (10/(cosmology.lum_dist_mpc(1.)*1e6))**2) < 1e-30
+    far = radiation.Observer("far", o.distance_pc); assert abs(far.z_eff() - 1.) < 1e-6 and abs(far.delay() - o.delay()) < 1e3
+    loc = radiation.Observer(); assert loc.cosmology() is None and loc.delay() == radiation.light_time_yr(10.) and loc.z_eff() == 0.
+    cat = radiation.ObserverCatalog([loc, o]); s = cat.summary(); assert list(s["cosmology"]) == [o.name]
+    assert radiation.ObserverCatalog().summary()["cosmology"] == {}
+    from ..events import bh_fidelity, agn_fid
+    f = bh_fidelity(1e9, .3); assert not f["visible"] and f["r_tde"] < f["r_s"]                # big SMBH, compact star: swallowed
+    f = bh_fidelity(1e6, 1.); assert f["visible"] and f["r_tde"] > f["r_s"] and f["gamma"] > 1
+    assert bh_fidelity(10., 1.)["visible"]                                                    # stellar-mass BH
+    a = agn_fid(1.); assert abs(a["r_isco"] - 3*a["r_s"]) < 1e-9 and abs(a["eta"] - .0572) < 1e-3 and a["L_edd"] > 1e46
+    assert strong_field.newtonian_limit_ok(1e6, 1e12)

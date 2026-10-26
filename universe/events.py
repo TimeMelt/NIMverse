@@ -6,6 +6,22 @@ events are rolled with the NIM quantum RNG.  Units: kpc, 1e8 Msun, G=1, t_unit =
 import numpy as np
 from .sim2 import make_galaxies, make_system, leapfrog, host_star, tidal_tensors, leapfrog_tidal, TIDE_PHYS, accel, T_G_MYR
 from .nim_rng import NIMRandom
+from .leaves import strong_field as sf
+
+# Strong-field fidelity (improvement item 6).  Unit mapping: sim mass unit = 1e8 Msun -> SMBH M_sun = m*MASS_UNIT_MSUN;
+# stellar BHs use their physical remnant mass (0.3*smass, Msun); disrupted star m_star = smass (Msun), R_star = R_sun*m^0.8 (AU).
+# Lengths compared in AU (strong_field units), independent of the kpc capture radius tde_r which only selects candidates.
+MASS_UNIT_MSUN = 1e8
+def star_radius_au(m_star): return float(.00465*max(m_star, .08)**.8)
+def bh_fidelity(M_bh_msun, m_star=1., chi=0.):
+    """Additive strong-field fields for an event log entry (AU / dimensionless)."""
+    Rs = star_radius_au(m_star); rs = sf.r_s(M_bh_msun); rt = sf.r_tde(M_bh_msun, m_star, Rs); ri = sf.r_isco(M_bh_msun, chi)
+    return dict(M_bh_msun=float(M_bh_msun), r_s=float(rs), r_tde=float(rt), r_isco=float(ri), visible=bool(rt > rs),
+                gamma=float(sf.gamma_orbit(max(rt, ri), M_bh_msun)), eta=float(1-np.sqrt(1-rs/(3*ri))))   # eta = 1-E_isco (2GM/3c^2 r_isco); Schwarzschild 0.057
+def agn_fid(m_sim, chi=0.):
+    """AGN strong-field report: r_s / r_isco (AU), thin-disk efficiency eta, L_edd (erg/s); disk exists outside ISCO."""
+    M = float(m_sim)*MASS_UNIT_MSUN; f = bh_fidelity(M, 1., chi)
+    return dict(M_bh_msun=M, r_s=f["r_s"], r_isco=f["r_isco"], eta=f["eta"], L_edd=1.26e38*M, gamma_isco=float(sf.gamma_orbit(f["r_isco"], M)))
 
 # v5 (alternating training) adds two learnable fixes; absent keys -> v4 behaviour, so v4 results stay reproducible
 ESPACE5_EXTRA = {"tde_eff": (0., .1), "agn_duty_myr": (5., 200.)}
@@ -36,6 +52,10 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
     life = life_myr(sm, EP["life_exp"]); tdie = np.full(n, np.inf); tdie[st] = life[st]*(1-er.random(len(st)))/T_G_MYR  # steady-state ages
     smbh = list(np.where(kind == SMBH)[0]); active = {int(i): False for i in smbh}; accreted = {int(i): 0. for i in smbh}
     duty = EP["agn_duty_myr"]/T_G_MYR if "agn_duty_myr" in EP else 0.; fresh = {int(i): False for i in smbh}; until = {int(i): 0. for i in smbh}; on_time = {int(i): 0. for i in smbh}
+    # strong-field TDE gate: fidelity fields are always logged; "tag" (default) keeps type/AGN fuel unchanged (learned scores
+    # stay put: default SMBHs ~1e8.5-1e9 Msun are above the Hills mass for sun-like stars, so a hard gate swallows nearly all);
+    # "strict"/True relabels R_tde<r_s as "swallowed whole" (not luminous, no AGN fuel); False/"off" = legacy (no fields).
+    sfg = EP.get("sf_gate", C.get("sf_gate", "tag")); sfg = {True: "strict", False: "off"}.get(sfg, sfg); bhM = {}
     se2 = float(C["star_soft"]**2); log = []; triggered = 0; Mref = float(np.median(m[smbh])) if smbh else 1.
     def srcs(): return np.where((kind == 0) | (kind == SMBH) | (kind == SBH))[0]
     def acc():
@@ -57,7 +77,7 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                 bh = M >= EP["bh_mass_min"]; rem = (.3*M if bh else 1.4); fb = .7 if bh else 0.
                 kick = er.normal(0., 1., 3).ravel()*EP["kick_kms"]/V_KMS/np.sqrt(3)*(1-fb)
                 m[j] *= rem/M; v[j] += kick; kind[j] = SBH if bh else NS
-                if bh: e2[j] = .25*se2
+                if bh: e2[j] = .25*se2; bhM[int(j)] = .3*float(M)
                 grb = bool(bh and er.random() < EP["grb_prob"]); pulsar = bool(not bh and er.random() < .7)
                 d = np.linalg.norm(x[st]-x[j], axis=1); near = st[(d < .35) & (kind[st] == 1)]   # shell-triggered star formation
                 trig = near[er.random(len(near)) < .3] if len(near) else near
@@ -73,9 +93,12 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                     dv = np.linalg.norm(v[hit]-v[b], axis=1); dh = np.maximum(d[d < rt], 1e-4)
                     hit = hit[(dv**2 < 2*m[b]/dh) & (er.random(len(hit)) < EP["tde_eff"])]
                 for j in hit:
+                    Mb = float(m[b])*MASS_UNIT_MSUN if kind[b] == SMBH else bhM.get(int(b), float(m[b])*MASS_UNIT_MSUN)
+                    fid = bh_fidelity(Mb, float(sm[j])) if sfg != "off" else {}; lum = fid.get("visible", True) or sfg != "strict"   # dynamics identical either way
                     p = m[b]*v[b] + .5*m[j]*v[j]; m[b] += .5*m[j]; v[b] = p/m[b]; kind[j] = GONE; m[j] = 0.
-                    if kind[b] == SMBH: accreted[int(b)] += 1; fresh[int(b)] = True
-                    log.append(dict(type="tidal disruption", t=t, frame=fr, i=int(j), b=int(b), g=int(gid[b]), x=x[b].tolist(), mass=float(sm[j])))
+                    if kind[b] == SMBH: accreted[int(b)] += 1; fresh[int(b)] = fresh[int(b)] or lum   # swallowed whole: no disk -> no AGN fuel
+                    log.append(dict(type="tidal disruption" if lum else "swallowed whole", **({"swallowed": not fid["visible"]} if fid else {}), t=t, frame=fr, i=int(j), b=int(b),
+                                    g=int(gid[b]), x=x[b].tolist(), mass=float(sm[j]), **fid))
             # 3) SMBH mergers
             sb = [b for b in smbh if kind[b] == SMBH]
             for p_ in range(len(sb)):
@@ -95,11 +118,11 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                     if active[ib] and t >= until[ib]:
                         active[ib] = False; log.append(dict(type="quasar fades", t=t, frame=fr, i=ib, g=int(gid[b]), x=x[b].tolist(), mass=float(m[b])))
                     if fresh[ib] and not active[ib] and er.random() < EP["agn_prob"]:
-                        active[ib] = True; until[ib] = t + duty; log.append(dict(type="quasar ignition", t=t, frame=fr, i=ib, g=int(gid[b]), x=x[b].tolist(), mass=float(m[b])))
+                        active[ib] = True; until[ib] = t + duty; log.append(dict(type="quasar ignition", t=t, frame=fr, i=ib, g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {})))
                     fresh[ib] = False; on_time[ib] += evk*dt*active[ib]
             for b in ([] if duty else smbh):
                 if kind[b] == SMBH and not active[int(b)] and accreted[int(b)] > 0 and er.random() < EP["agn_prob"]:
-                    active[int(b)] = True; log.append(dict(type="quasar ignition", t=t, frame=fr, i=int(b), g=int(gid[b]), x=x[b].tolist(), mass=float(m[b])))
+                    active[int(b)] = True; log.append(dict(type="quasar ignition", t=t, frame=fr, i=int(b), g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {})))
         a = acc(); v += .5*dt*a
         if i % every == 0: fx.append(x.copy()); fv.append(v.copy()); fk.append(kind.copy())
     for b in ([] if duty else smbh):   # initial AGN roll for unfed SMBHs (quiescent vs active nuclei)

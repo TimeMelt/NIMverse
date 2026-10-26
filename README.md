@@ -28,8 +28,8 @@ Run (NIM checkout on the path):
 - **Climate history + impacts** (`world.py`): `ClimateHistory` keeps the rolling (t, T, water) record. `impacts()` draws Poisson impacts from `HabitatState.impact_flux*impact_scale`. Each impact gives an impact-winter dT and an `impact_kill` biomass fraction, and both biosphere and organism hardiness consume them.
 - **Radiation / observers** (`radiation.py`): an `ObserverCatalog` takes BioSignFlux emitted at t_emit and delivers it at t_emit + light time (distance in pc, default 10). It applies 1/d² dimming (with an `aperture` multiplier) and a toy Hubble-flow redshift, or a cosmological z through lookback time.
 - **Culture** (`culture.py`): biological-first. It switches on only after organisms have lived ≥1000 world-yr, biomass ≥ `tech_threshold`, and diversity ≥2. Tech then grows logistically at `tech_rate` and shows up in `BioSignFlux.tech`. It is on by default; pass `--no-culture` to disable it.
-- **Cosmology stub** (`cosmology.py`): flat ΛCDM a(t), H(a), Hubble flow, luminosity distance, lookback time, and `CosmoDrive`. It is not wired into sim2.
-- **Strong-field stub** (`strong_field.py`): r_s, Kerr ISCO, TDE radius, γ(r) static and orbital, 1PN precession, and `newtonian_limit_ok()`. It is not a GR solver.
+- **Cosmology** (`cosmology.py`): flat ΛCDM a(t), H(a), Hubble flow, comoving/luminosity distance, lookback time, z(d_C) inversion, and `CosmoDrive`. Wired into radiation observers (see item 6 below); it does not drive sim2 time.
+- **Strong-field** (`strong_field.py`): r_s, Kerr ISCO, TDE radius, γ(r) static and orbital, 1PN precession, and `newtonian_limit_ok()`. Wired into `events.py` TDE/AGN log fidelity (item 6). It is not a GR solver.
 - **Life training** (`learn_life.py`): numpy SPSA over normalised LIFE_SPACE. The loss is |habitability| + |eco stability| + 2·planted-seed recovery after an 80% disturbance. QrnLOpt was skipped because it is too heavy for this inner loop.
 - **System hook** (`run_life_from_system.py`): make_system → short `leapfrog_tidal` orbit integration (optional toy tide) → life_loop. Optional `--host-mass` / `--dm-frac` hints. The event training scripts are untouched.
 
@@ -40,7 +40,7 @@ Run:
     PYTHONPATH=/workspace/NIM python -m universe.learn_life --iters 6 --years 600 --seeds 3   # -> results/learned_life.json + .log
     PYTHONPATH=/workspace/NIM python -m pytest -q universe/leaves/
 
-Still stubs: no radiative transfer (host spectra are toy blackbody bands only), stellar evolution is a toy MS + subgiant/RGB track (not MESA; no He flash, HB or white dwarf), no GR dynamics, cosmology isn't coupled to the sim, and culture is a single logistic marker.
+Still stubs: no radiative transfer (host spectra are toy blackbody bands only), stellar evolution is a toy MS + subgiant/RGB track (not MESA; no He flash, HB or white dwarf), no GR dynamics (strong-field enters only as event-log fidelity), and cosmology couples to observers/life reports but not to N-body time. Culture is the v3 model (resources, pollution, polities, energy mix; see below), not a logistic marker.
 Backup from before the leaves: `/workspace/backups/universe_pre_leaves_20261025_163027{.tar.gz,/}`.
 
 ## Life surface viewer (see the organisms, not just charts)
@@ -264,3 +264,30 @@ On every seed, species ever falls between 45 and 58, where it used to range from
 Niche-grid outcome on seed 4 (with the limiter on): 3×3 gives 52, **4×4 gives 45**, 5×5 gives 52 (min pop 108), 4×4 with `NICHE_ALPHA` .6 gives 47, 4×4 with 4 belts gives 48, and the kernel at σ .12 or .2 gives 51. Across the six other seeds, 4×4 is neutral to slightly better than 3×3 (last-10 min alive is higher on 3 and 13). The finer grid no longer raises churn, because the limiter absorbs the extra rare-niche splits. Shipped 4×4.
 
 Tests: the seed-4 test bounds are unchanged (ever ≤ 70, median alive 3–12, metabolism band). The new `test_species_churn_multiseed_light` runs seeds 8 and 12 at 15 kyr as a cheaper proxy (16 and 23 species ever) and asserts ever ≤ 45, median alive ≥ 3, last-10 alive ≥ 2 and min pop ≥ 50. Full suite: 49 passed.
+
+### Cosmology + strong-field wiring (improvement item 6)
+
+**Cosmology → observers** (`leaves/radiation.py`)
+- `Observer.from_z(z)` builds an observer from redshift alone: `distance_pc` = comoving distance, so dimming is `(10 pc/d_L)²` with `d_L = (1+z) d_C` (`radiation.dimming`). That is the same formula as before, now read consistently as comoving distance.
+- Delay is the lookback time whenever `z` is set **or** `distance_pc > 10 Mpc` (z then comes from `cosmology.z_of_comoving`). Below 10 Mpc the delay is still light time, and between 100 kpc and 10 Mpc the toy `z_hubble` is unchanged.
+- `ObserverCatalog.summary()["cosmology"]` gives `{observer: {age_gyr, a, H, z, d_C_mpc, d_L_mpc, d_L_obs_mpc, lookback_gyr}}` (from `CosmoDrive.at_z(z).snapshot()`) for observers with z set or beyond 100 kpc. The default 10 pc observer gives `{}`, so the seed-4 life report is bit-identical; `results/life_demo_seed4.json` was refreshed and only gained `radiation.cosmology = {}`.
+
+**Strong-field → TDE/AGN** (`events.py`: `bh_fidelity`, `agn_fid`)
+- Unit mapping: sim mass unit = 1e8 M☉, so SMBH M☉ = `m × MASS_UNIT_MSUN`. Stellar BHs use their physical remnant mass `0.3 × smass`. The disrupted star has `m_* = smass` M☉ and `R_* = R☉ m^0.8`. All radii are in AU. The kpc `tde_r` capture radius only selects candidates.
+- Each `tidal disruption` entry gets `M_bh_msun, r_s, r_tde, r_isco, visible (r_tde > r_s), swallowed, gamma (circular-orbit γ at max(r_tde, r_isco)), eta`. Each `quasar ignition` entry gets `M_bh_msun, r_s, r_isco, eta (thin-disk 1−E_isco, 0.057 for χ=0), L_edd, gamma_isco`.
+- The gate is set by `EP["sf_gate"]` or `C["sf_gate"]`:
+  - `"tag"` (default): fields are logged, but types, AGN fuel and scores don't change.
+  - `"strict"`/`True`: R_tde < r_s is logged as `swallowed whole`, which is not luminous and does not fuel an AGN.
+  - `"off"`/`False`: legacy log entries with no fields.
+- Dynamics are identical in every mode. Strict is opt-in because default SMBHs (~3e8–1e9 M☉) sit above the Hills mass for the sub-solar star particles, so nearly every TDE gets swallowed. Smoke run (seed 7, 400 stars/galaxy, 300 steps):
+
+| EP | gate | TDE / swallowed | events score | agn |
+|---|---|---|---|---|
+| defaults | off = tag | 34 / 0 | 0.727 | 0.000 |
+| defaults | strict | 0 / 34 | 0.708 | 0.000 |
+| learned_alt2 | off = tag | 4 / 0 | 0.796 | 0.779 |
+| learned_alt2 | strict | 0 / 4 | 0.738 | 0.368 |
+
+Tests: `test_cosmo_strong_field_wiring` in `leaves/test_deferred_leaves.py`.
+
+Remaining limits: no GR integrator (geodesics, Kerr orbits, GW inspiral), no perturbation cosmology or lensing, `CosmoDrive` does not drive sim2 leapfrog time, and no spin evolution (χ=0 by default).
