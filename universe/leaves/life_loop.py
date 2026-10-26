@@ -3,21 +3,31 @@ For each HZ/near-HZ rocky habitat: HostWeather(flares) -> impacts -> world (+his
 -> biosphere -> organisms -> culture (optional) -> BioSignFlux -> radiation observers (light-time delayed)."""
 import copy, numpy as np
 from ..bodies import lum, temp
-from . import world, chemistry, biosphere, organisms, individuals, culture as culture_mod
+from . import stellar, world, chemistry, biosphere, organisms, individuals, culture as culture_mod
 from .packets import HostWeather, ScoreBus, as_bus
 from .radiation import ObserverCatalog, Observer
 from .system_habitat import habitats_from_system, candidate
 
-def host_weather(S, distance_pc=None, M_override=None):
+def host_weather(S, distance_pc=None, M_override=None, seed=None):
+    """HostWeather for the system's primary.  With S["age_Gyr"] or a seed the star gets a system age prior
+    (stellar.age_prior(M, seed): deterministic log-uniform, massive stars younger) used unless LP stellar_age_Gyr is non-default."""
     st = np.asarray(S["kind"]) == 0; M = float(M_override or S["m"][st].max())
     L = float(sum(lum(float(m)) for m in S["m"][st])) if not M_override else float(lum(M))
     d = distance_pc if distance_pc is not None else float(S.get("distance_pc", 10.))
-    return HostWeather.from_star(M, L, float(temp(M)), d)
+    hw = HostWeather.from_star(M, L, float(temp(M)), d)
+    if S.get("age_Gyr") is not None: hw.age_prior_Gyr = float(S["age_Gyr"])
+    elif seed is not None: hw.age_prior_Gyr = stellar.age_prior(M, seed)
+    return hw
+
+def sync_habitat(h, hw):
+    """Live habitat snapshot from the (evolving) host: hz_in/out, L_star, irradiance (baseline L_star/a^2, flares excluded).
+    Orbit a and the initial in_hz (reference for hz_drift) stay fixed."""
+    h.L_star = float(hw.L_star); h.hz_in, h.hz_out = float(hw.hz_in_now), float(hw.hz_out_now); h.irradiance = float(hw.L_star/max(h.a, 1e-9)**2)
 
 def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
                 culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40):
     """model="individuals" (default): literal organisms with ids/parents + evolution (leaves.individuals); "cohorts": legacy cohort model."""
-    P = as_bus(LP); hw = copy.deepcopy(hw); chem = chemistry.init_chem(h); gate = chemistry.planted_gate(0.) if plant else None
+    P = as_bus(LP); hw = copy.deepcopy(hw); h = copy.deepcopy(h); chem = chemistry.init_chem(h); gate = chemistry.planted_gate(0.) if plant else None
     bio = biosphere.Biosphere(); coh = []; pop = None; ser_every = max(dt, years/200.); series = []; clim = None; pkt = None; flux = None
     drng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 11])        # own stream: drift does not perturb the main rng draws
     orng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 23])        # own stream for organisms: life draws never shift impacts/abiogenesis timing
@@ -26,7 +36,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
     for k in range(int(years/dt)):
         t = k*dt; dist = 0.
         if disturb_at is not None and abs(t - disturb_at) < dt/2: dist = .8
-        hw.step(t, dt, rng, P)
+        hw.step(t, dt, rng, P); sync_habitat(h, hw)
         stress = {"dT": 0.}; imp = world.impacts(h, P, rng, dt)
         if drift is not None: stress.update(drift.step(t, dt, drng))          # planetary climate drift (T, water, class, stress)
         stress.update({k: v for k, v in imp.items() if k != "dT"}); stress["dT"] += imp.get("dT", 0.); stress["impact_dT"] = imp.get("dT", 0.)
@@ -73,7 +83,7 @@ def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after
 
 def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, culture=True, distance_pc=None, observers=None,
               emit_every=None, M_override=None, record=None, model="individuals"):
-    P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override)
+    P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override, seed=seed)
     cat = ObserverCatalog(observers or [Observer("obs0", hw.distance_pc)])
     ee = emit_every or max(1, int(years/dt)//400)
     habs = habitats_from_system(S, seed, P); rep = []
@@ -83,7 +93,8 @@ def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, cultu
     cat.poll(years)
     clims = [world.step(h, hw, P) for h in habs]
     live = [r for r in rep if "skipped" not in r]
-    return dict(seed=int(seed), host=hw.to_dict(), host_flares=(live[0]["host"] if live else hw.summary()), LP=P.knobs, years=years, dt=dt,
+    h0 = live[0]["host"] if live else {}
+    return dict(seed=int(seed), host=hw.to_dict(), stellar_age=dict(prior_Gyr=hw.age_prior_Gyr, source=h0.get("age_source"), age0_Gyr=h0.get("age0_Gyr")), host_flares=(live[0]["host"] if live else hw.summary()), LP=P.knobs, years=years, dt=dt,
                 planted=plant, culture_enabled=culture, habitability_residual=ScoreBus.habitability(clims), planets=rep,
                 with_life=[r["habitat"]["name"] for r in rep if r.get("biosphere", {}).get("alive")],
                 with_tech=[r["habitat"]["name"] for r in rep if r.get("tech", 0) > 0],

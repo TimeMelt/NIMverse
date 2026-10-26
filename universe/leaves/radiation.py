@@ -1,6 +1,6 @@
 """Radiation / observers leaf: BioSignFlux emitted at world time t_emit reaches an observer at t_emit + light_time.
 Distance is a per-system placeholder (pc) or a cosmological z (via cosmology).  Redshift is a toy: Hubble-flow z
-(or given z) and (1+z) dimming of the flux by 1/d^2 relative to 10 pc.  No spectra/radiative transfer (stub)."""
+(or given z) and (1+z) dimming of the flux by 1/d^2 relative to 10 pc.  Observers stay scalar; host spectra are toy blackbody bands (stellar.uv_bands / HostWeather.uv_bands), no radiative transfer."""
 import numpy as np
 from dataclasses import dataclass, field, asdict
 from . import cosmology as cosmo

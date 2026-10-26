@@ -120,3 +120,47 @@ def test_stellar_brightening_warms_climate():
     Te, Tc = T(ev), T(ctl); q = len(Te)//4
     assert Te[-q:].mean() - Te[:q].mean() > 10. and abs(Tc[-q:].mean() - Tc[:q].mean()) < 1e-6
     assert ev["host"]["dL_frac"] > .2 and ctl["host"]["dL_frac"] == 0. and ev["climate"]["stressors"]["hz_in_now"] > ctl["climate"]["stressors"]["hz_in_now"]
+
+def test_stellar_post_ms_track():
+    from . import stellar
+    tm = stellar.t_ms_Gyr(1.); Le, Te, Re = stellar.track(1., 1., 5800., 4.6, tm)
+    L, T, R = stellar.track(1., 1., 5800., 4.6, 1.25*tm)
+    assert L > 1.5*Le and T < Te and R > Re and stellar.phase(1., 1.25*tm) == "rgb" and stellar.phase(1., 1.05*tm) == "subgiant"
+    assert stellar.track(1., 1., 5800., 4.6, 5*tm) == stellar.track(1., 1., 5800., 4.6, stellar.max_age_Gyr(1.))   # finite cap
+    assert stellar.activity_factor(1., 4.6, 1.2*tm) < .5*stellar.activity_factor(1., 4.6, tm)
+    s = HostWeather.from_star(1., 1., 5800.); r = np.random.default_rng(0)
+    P = LifeParamBus({"stellar_evolve": 1., "stellar_age_rate": 1e6, "stellar_age_Gyr": 9.})
+    for k in range(600): s.step(k*10., 10., r, P)
+    sm = s.summary(); assert sm["post_ms"] and sm["phase"] == "rgb" and abs(sm["age_Gyr"] - stellar.max_age_Gyr(1.)) < .05
+    assert np.isfinite(s.L_star) and s.L_star > 2 and s.R_star > 1.5 and sm["age_source"] == "knob"
+
+def test_blackbody_uv_bands():
+    from . import stellar
+    assert abs(stellar.uv_surface_rel(5772.) - 1) < 1e-9
+    sun, hot, md = (stellar.uv_bands(T) for T in (5772., 9000., 3200.))
+    assert abs(sum(sun["frac"][k] for k in ("uvc", "uvb", "uva", "optical", "ir")) - 1) < .02
+    assert hot["uv_surface_rel_sun"] > 5 > 1 > md["uv_surface_rel_sun"] and hot["uv_to_optical"] > sun["uv_to_optical"] > 5*md["uv_to_optical"]
+    assert hot["frac"]["uvc"] > sun["frac"]["uvc"] > md["frac"]["uvc"]
+    s = HostWeather.from_star(1., 1., 5800.); assert "nuv" in s.uv_bands["frac"] and s.summary()["uv_bands"]
+
+def test_live_habitat_hz_sync():
+    h = hab(1.); P = LifeParamBus(dict(climate_drift=0., impact_scale=0., flare_rate_mult=0., stellar_evolve=1., stellar_age_rate=1e6))
+    hz0 = (h.hz_in, h.hz_out, h.irradiance)
+    r = run_habitat(h, SUN, P, np.random.default_rng(3), 4000, 10., plant=True, culture=False)
+    hd, st = r["habitat"], r["climate"]["stressors"]
+    assert (h.hz_in, h.hz_out, h.irradiance) == hz0                                         # caller's habitat untouched
+    assert hd["hz_in"] > hz0[0] and abs(hd["hz_in"] - st["hz_in_now"]) < 1e-12 and abs(hd["hz_out"] - st["hz_out_now"]) < 1e-12
+    assert abs(hd["irradiance"] - r["host"]["L_star"]/h.a**2) < 1e-12 and hd["L_star"] == r["host"]["L_star"]
+
+def test_system_age_prior():
+    from . import stellar
+    from .life_loop import host_weather
+    a = [stellar.age_prior(1., s) for s in (1, 2, 3)]; assert len(set(a)) == 3 and a[0] == stellar.age_prior(1., 1)
+    assert stellar.age_prior(2., 1) != stellar.age_prior(1., 1)
+    for M in (.3, 1., 1.5, 3.):
+        for sd in range(20): assert .1 <= stellar.age_prior(M, sd) <= stellar.X_START_MAX*stellar.t_ms_Gyr(M) + 1e-9
+    S = dict(kind=np.array([0]), m=np.array([1.]))
+    hw = host_weather(S, seed=7); r = np.random.default_rng(0); hw.step(0., 10., r, LifeParamBus({}))
+    assert hw.age_source == "system" and hw.age0_Gyr == stellar.age_prior(1., 7)
+    hk = host_weather(S, seed=7); hk.step(0., 10., r, LifeParamBus({"stellar_age_Gyr": 2.}))
+    assert hk.age_source == "knob" and hk.age0_Gyr == 2.

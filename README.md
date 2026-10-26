@@ -40,7 +40,7 @@ Run:
     PYTHONPATH=/workspace/NIM python -m universe.learn_life --iters 6 --years 600 --seeds 3   # -> results/learned_life.json + .log
     PYTHONPATH=/workspace/NIM python -m pytest -q universe/leaves/
 
-Still stubs: no spectra or radiative transfer, no stellar evolution track (dM is wind-only), no GR dynamics, cosmology isn't coupled to the sim, and culture is a single logistic marker.
+Still stubs: no radiative transfer (host spectra are toy blackbody bands only), stellar evolution is a toy MS + subgiant/RGB track (not MESA; no He flash, HB or white dwarf), no GR dynamics, cosmology isn't coupled to the sim, and culture is a single logistic marker.
 Backup from before the leaves: `/workspace/backups/universe_pre_leaves_20261025_163027{.tar.gz,/}`.
 
 ## Life surface viewer (see the organisms, not just charts)
@@ -136,7 +136,7 @@ Seed scan 0–19 (40 kyr, dt 20, defaults): **4/20 → 12/20** with life.
 
 ## Stellar evolution + HostWeather depth
 
-`universe/leaves/stellar.py` adds a toy main-sequence track (no post-MS, no spectra). `HostWeather.step` now calls `evolve()` to age the star first, then adds Poisson flares on top of the evolved baseline (`L_now = L_star(t)·(1+flare)`, `uv_now` from the evolved `uv_proxy`).
+`universe/leaves/stellar.py` adds a toy main-sequence track, extended below with a toy post-MS and blackbody bands. `HostWeather.step` now calls `evolve()` to age the star first, then adds Poisson flares on top of the evolved baseline (`L_now = L_star(t)·(1+flare)`, `uv_now` from the evolved `uv_proxy`).
 
 - **Track:** `t_MS = 10 Gyr·M^-2.5`. With fractional age `x = age/t_MS`, `L ∝ 1/(1+0.4(1−x/0.457))`, which is the Gough faint-young-Sun law. Under it the Sun starts at ZAMS L≈0.7 and brightens ~8–9 %/Gyr today, while M dwarfs stay almost flat (0.3 Msun gains <2 % in 3.4 Gyr) and heavier stars evolve faster. `Teff ∝ L^0.1`, `R` comes from `L = R²Teff⁴`, and `uv_proxy = (Teff/5800)⁴`. The `(L, Teff, flare_rate)` passed to `from_star` is the star's state at the initial age, and the track only rescales it.
 - **Activity:** for M ≥ 0.6, `flare_rate ∝ age^-1/2` (Skumanich). Fully convective M < 0.6 stars stay saturated (flat rate) for `8 Gyr·(0.6/M)`.
@@ -149,7 +149,16 @@ Seed scan 0–19 (40 kyr, dt 20, defaults): **4/20 → 12/20** with life.
 - **Host summary fields:**
   - Before: M, L, flare_rate, n_flares, dM, uv_mean/max, flare_steps, hist_tail, distance.
   - Now also: `T_eff, R_star, uv_proxy, age_Gyr, age0_Gyr, t_ms_Gyr, L0, dL_frac, hz_in_now, hz_out_now, L_track` ([t_w, age, L, Teff], ≤~65 points).
-- **Effect (1 Msun, a=1, no drift, 4 kyr, `stellar_evolve=1, stellar_age_rate=1e6`):** age goes 4.6→8.6 Gyr, L +54 %, Teff 5800→6056 K, uv_proxy 1.19, flare_rate .05→.037, HZ 0.95–1.67 → 1.18–2.07 AU, so `hz_drift` becomes True. Planet T climbs from a first-quarter mean of 290.7 K to a last-quarter mean of 312.4 K; the control stays flat at 287.8 K.
-- **Defaults:** `stellar_evolve=0` keeps the star fixed. At the real rate (`evolve=1, rate=1`), 40 kyr changes L by only ~1e-5, but even that perturbation chaotically shifts the seed-4 trajectory past a borderline metabolism-std assertion. With the default of 0, seed-4 is bit-identical to before: life on planet2, min pop 117, 2nd-half metabolism mean 0.53, no extinction. The seed-4 host (1.45 Msun, t_MS 3.9 Gyr) is anchored at age 3.53 Gyr.
+- **Effect (1 Msun, a=1, no drift, 4 kyr, `stellar_evolve=1, stellar_age_rate=1e6`):** age goes 4.6→8.6 Gyr, L +54 %, Teff 5800→6056 K, uv_proxy 1.44 (blackbody NUV band; was 1.19 with the old (T/5800)⁴), flare_rate .05→.037, HZ 0.95–1.67 → 1.18–2.07 AU, so `hz_drift` becomes True. Planet T climbs from a first-quarter mean of 290.7 K to a last-quarter mean of 312.4 K; the control stays flat at 287.8 K.
+- **Defaults:** `stellar_evolve=0` keeps the star fixed. At the real rate (`evolve=1, rate=1`), 40 kyr changes L by only ~1e-5, but even that perturbation chaotically shifts the seed-4 trajectory past a borderline metabolism-std assertion. With the default of 0, seed-4 is bit-identical to before: life on planet2, min pop 117, 2nd-half metabolism mean 0.53, no extinction. The seed-4 host (1.45 Msun, t_MS 3.9 Gyr) now takes its age from the system prior (0.17 Gyr, `age_source="system"`; it was the 3.53 Gyr knob cap). With evolve=0 that changes only report fields.
 - Tests: `test_stellar_ms_track_unit`, `test_hostweather_stellar_evolve_and_fixed`, `test_stellar_brightening_warms_climate`.
-- Leftovers: no post-MS (subgiant/RGB), no spectra/blackbody UV bands, the habitat snapshot `hz_in/hz_out/irradiance` stays fixed (the live values are in the stressors), and there is no MS-age prior from the system generator.
+
+### Stellar stubs closed
+
+The four leftovers from the pass above are now covered (all toy-level):
+- **Post-MS toy track (`stellar.py`):** for x = age/t_MS > 1, `L = L_MS_end·(1 + 8(x−1)^1.5)` and `Teff ∝ (L/L_MS_end)^-0.15`, so R swells. `stellar.phase()` returns `ms` / `subgiant` (x < 1.15) / `rgb`. Activity drops a further `1/(1+10(x−1))`. During `evolve()`, age is clamped at `1.4·t_MS` (L ≈ 3× the MS-end value), so the track stays finite. The start age is still capped at 0.9·t_MS, because `from_star` L/Teff are MS values. The host summary gains `phase` and `post_ms`. For example, 1 Msun at 12 Gyr gives L 3.3, Teff 5700 K, R 1.85.
+- **Blackbody bands:** `stellar.band_fractions(T)` uses Planck integrals over uvc 100–280, uvb 280–315, uva 315–400, nuv 200–400, optical 400–700 and ir >700 nm. `uv_surface_rel(T)` is the surface NUV flux relative to a 5772 K blackbody (exactly 1 at the Sun), and `uv_bands(T, L)` returns a snapshot. `HostWeather.uv_bands` is set at `from_star` and refreshed while evolving. When evolving, `uv_proxy = uv0·uv_surface_rel(T)/uv_surface_rel(T0)`, which is continuous with the from_star value, so evolve=0 stays bit-identical. Chemistry and flares consume it unchanged. Radiation observers stay scalar (no RT).
+- **Live habitat snapshot:** `run_habitat` deep-copies the habitat and calls `life_loop.sync_habitat(h, hw)` every step, which sets `L_star`, `hz_in`, `hz_out` and `irradiance = L_star/a²` (baseline, flares excluded) from the host. `a` and the initial `in_hz`, the reference for `hz_drift`, stay fixed. The caller's habitat object is never mutated.
+- **System age prior:** `stellar.age_prior(M, seed)` is a deterministic log-uniform draw in [0.1, min(0.9·t_MS, 12)] Gyr, so massive stars come out younger. `life_loop.host_weather(S, seed=...)` stores it in `hw.age_prior_Gyr`, or uses `S["age_Gyr"]` if the system carries one. Precedence at the first `evolve()`: a non-default LP `stellar_age_Gyr` wins (`age_source="knob"`). Otherwise the system prior is used (`age_source="system"`). Bare `HostWeather.from_star` has no prior and uses the knob (4.6). The `life_loop` report has `stellar_age={prior_Gyr, source, age0_Gyr}`.
+- Tests: `test_stellar_post_ms_track`, `test_blackbody_uv_bands`, `test_live_habitat_hz_sync`, `test_system_age_prior`. The seed-4 40 kyr demo was rerun: every life/biosphere/radiation field is identical; only host/habitat report fields changed.
+- Still out of scope: full radiative transfer, real MESA tracks (He flash, HB, AGB, WD), cosmology coupling, culture depth, GR.

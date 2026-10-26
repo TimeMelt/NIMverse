@@ -24,22 +24,32 @@ class HostWeather(_P):
     n_flares: int = 0; irr_hist: list = field(default_factory=list); hist_len: int = 64; distance_pc: float = 10.
     age_Gyr: float = -1.; age0_Gyr: float = -1.; L0: float = 0.; T0: float = 0.; fr0: float = 0.; R_star: float = 1.
     hz_in_now: float = 0.; hz_out_now: float = 0.; L_track: list = field(default_factory=list); track_every: float = 200.
+    age_prior_Gyr: float = -1.; age_source: str = "knob"; uv0: float = 0.; uv_bands: dict = field(default_factory=dict); phase: str = "ms"
     @classmethod
     def from_star(cls, M, L, T, distance_pc=10.):
         fr = float(0.5/max(M, .08)**2 if M < .6 else .05); uv = float((T/5800.)**4); hi, ho = stellar.hz(L)
-        return cls(M, L, T, 0., fr, uv, L_now=float(L), uv_now=uv, distance_pc=float(distance_pc), hz_in_now=hi, hz_out_now=ho)
+        return cls(M, L, T, 0., fr, uv, L_now=float(L), uv_now=uv, distance_pc=float(distance_pc), hz_in_now=hi, hz_out_now=ho,
+                   uv_bands=stellar.uv_bands(T, L))
     def mdot(self): return 2e-14*self.L_star**.5*(1 + 10*self.flare_rate)      # Msun/yr, solar wind ~2e-14
     def evolve(self, t, dt, P):
         """Advance the MS track by dt world-yr x stellar_age_rate x stellar_evolve; rescale L, Teff, R, uv_proxy, flare_rate, HZ.
-        The (L, Teff, flare_rate) given to from_star are anchored to the star's age at the first call (knob stellar_age_Gyr)."""
+        The (L, Teff, flare_rate) given to from_star are anchored to the star's age at the first call.
+        Age precedence: an explicitly set (non-default) LP stellar_age_Gyr wins; otherwise a system prior in age_prior_Gyr
+        (set by life_loop.host_weather from stellar.age_prior(M, seed) or S["age_Gyr"]) is used; bare from_star() has none -> knob (4.6).
+        Start age capped at 0.9 t_MS (L0 from from_star is an MS value); evolution may then run post-MS up to 1.4 t_MS (toy)."""
         if self.age0_Gyr < 0:
-            self.age0_Gyr = self.age_Gyr = float(min(P["stellar_age_Gyr"], .9*stellar.t_ms_Gyr(self.M_star)));   # still on the MS (no post-MS track)
-            self.L0, self.T0, self.fr0 = self.L_star, self.T_eff, self.flare_rate
+            knob = P["stellar_age_Gyr"]; use_sys = self.age_prior_Gyr > 0 and knob == LIFE_DEFAULTS["stellar_age_Gyr"]
+            self.age_source = "system" if use_sys else "knob"
+            self.age0_Gyr = self.age_Gyr = float(min(self.age_prior_Gyr if use_sys else knob, stellar.X_START_MAX*stellar.t_ms_Gyr(self.M_star)))
+            self.L0, self.T0, self.fr0, self.uv0 = self.L_star, self.T_eff, self.flare_rate, self.uv_proxy
         ev = P["stellar_evolve"]*P["stellar_age_rate"]
         if ev > 0:
-            self.age_Gyr += dt*1e-9*ev; M = self.M_star + self.dM_star
+            M = self.M_star + self.dM_star; self.age_Gyr = min(self.age_Gyr + dt*1e-9*ev, stellar.max_age_Gyr(M))
             self.L_star, self.T_eff, self.R_star = stellar.track(M, self.L0, self.T0, self.age0_Gyr, self.age_Gyr)
-            self.uv_proxy = float((self.T_eff/5800.)**4); self.flare_rate = self.fr0*stellar.activity_factor(M, self.age0_Gyr, self.age_Gyr)
+            # UV from the blackbody band integral, anchored so uv_proxy is continuous with the from_star value
+            self.uv_proxy = float(self.uv0*stellar.uv_surface_rel(self.T_eff)/stellar.uv_surface_rel(self.T0))
+            self.flare_rate = self.fr0*stellar.activity_factor(M, self.age0_Gyr, self.age_Gyr)
+            self.uv_bands = stellar.uv_bands(self.T_eff, self.L_star); self.phase = stellar.phase(M, self.age_Gyr)
         self.hz_in_now, self.hz_out_now = stellar.hz(self.L_star)
         if not self.L_track or t - self.L_track[-1][0] >= self.track_every:
             self.L_track.append([float(t), float(self.age_Gyr), float(self.L_star), float(self.T_eff)]); del self.L_track[:-256]
@@ -60,7 +70,8 @@ class HostWeather(_P):
                     flare_rate=self.flare_rate, n_flares=self.n_flares, dM_star=self.dM_star,
                     uv_mean=float(sum(u)/len(u)) if u else self.uv_proxy, uv_max=float(max(u)) if u else self.uv_proxy,
                     flare_steps=int(sum(x[4] > 0 for x in h)), hist_tail=h[-8:], distance_pc=self.distance_pc,
-                    age_Gyr=self.age_Gyr, age0_Gyr=self.age0_Gyr, t_ms_Gyr=stellar.t_ms_Gyr(self.M_star), L0=self.L0 or self.L_star,
+                    age_Gyr=self.age_Gyr, age0_Gyr=self.age0_Gyr, age_source=self.age_source, age_prior_Gyr=self.age_prior_Gyr,
+                    phase=self.phase, post_ms=self.phase != "ms", uv_bands=self.uv_bands, t_ms_Gyr=stellar.t_ms_Gyr(self.M_star), L0=self.L0 or self.L_star,
                     dL_frac=float(self.L_star/self.L0 - 1) if self.L0 else 0., hz_in_now=self.hz_in_now, hz_out_now=self.hz_out_now,
                     L_track=tr[::max(1, len(tr)//64)] + (tr[-1:] if tr and (len(tr) - 1) % max(1, len(tr)//64) else []))
 
