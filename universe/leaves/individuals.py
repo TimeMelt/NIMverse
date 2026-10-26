@@ -20,8 +20,12 @@ E_MAX = 12.           # energy store cap (~24 yr of basal burn: buffers famine s
 SPECIES_EVERY = 500.  # yr between re-clusterings of the living set
 NEW_SPECIES_FRAC = .06 # a split founds a new species_id only if the daughter cluster holds >= 6% of the living
 RECENT_YR = 10000.     # vanished species ids within this window can be re-used by a matching cluster
+RECYCLE_R = 2.0       # a new cluster re-uses a recent vanished id if its centroid is within RECYCLE_R x cut
 CL_CUT = .6          # dendrogram cut as a fraction of speciation_dist
 MIN_SPECIES = 4       # clusters smaller than this are merged into the nearest larger one
+SPLIT_SEP = .8         # a daughter founds a new id only if its centroid sits >= SPLIT_SEP x cut from its parent cluster (else merge back)
+SOFT_MAX = 10         # soft cap: above SOFT_MAX living species ids, the daughter-size bar rises by SOFT_K per extra cluster (no hard ceiling)
+SOFT_K = .5
 GEO_W = .5            # weight of great-circle distance (rad/pi) in the speciation metric (allopatry)
 WATER_W = .6         # weight of dry/frozen surface in chronic stress (ocean refugia buffer the water-fraction swings)
 LAT_STRESS = .3       # poles harsher than equator (mean zero over the sphere): local adaptation -> geographic species
@@ -229,18 +233,20 @@ def recluster(pop, P):
     small = ~np.isin(lab, big)
     if small.any():
         cols = np.isin(lab, big); j = np.argmin(np.where(cols[None, :], Dm[small], np.inf), axis=1); lab[small] = lab[j]
-    new = pop.species.copy(); used = set()
+    new = pop.species.copy(); used = set(); cut = CL_CUT*P["speciation_dist"]
+    frac = NEW_SPECIES_FRAC*(1 + SOFT_K*max(0, len(np.unique(pop.species)) - SOFT_MAX)); cen_of = {}
     for c in sorted(np.unique(lab), key=lambda c: -int((lab == c).sum())):
         m = lab == c; ids, cnt = np.unique(pop.species[m], return_counts=True); o = np.argsort(-cnt); pick = None
         for q in o:
             if int(ids[q]) not in used: pick = int(ids[q]); break
-        if pick is None and m.sum() < NEW_SPECIES_FRAC*n: pick = int(ids[o[0]])   # small daughter cluster: no new id (hysteresis)
+        if pick is None and m.sum() < frac*n: pick = int(ids[o[0]])   # small daughter cluster: no new id (hysteresis + soft cap)
         cen = np.concatenate([x[m].mean(0), GEO_W*pop.pos[m].mean(0)])
+        if pick is None and int(ids[o[0]]) in cen_of and np.linalg.norm(cen - cen_of[int(ids[o[0]])]) < SPLIT_SEP*cut: pick = int(ids[o[0]])   # too close to parent: merge back
         if pick is None:                         # re-use a recently seen, now unused id whose centroid is close (no churn)
             near = [(np.linalg.norm(cen - c), i) for i, (c, tt) in pop.recent.items() if i not in used and pop.t - tt <= RECENT_YR]
-            if near and min(near)[0] < 1.5*CL_CUT*P["speciation_dist"]: pick = int(min(near)[1])
+            if near and min(near)[0] < RECYCLE_R*cut: pick = int(min(near)[1])
         if pick is None: pick = pop.next_species; pop.next_species += 1
-        used.add(pick); new[m] = pick; pop.recent[pick] = (cen, pop.t)
+        used.add(pick); new[m] = pick; pop.recent[pick] = (cen, pop.t); cen_of.setdefault(pick, cen)
     pop.recent = {i: v for i, v in pop.recent.items() if pop.t - v[1] <= RECENT_YR}
     pop.species = new
 

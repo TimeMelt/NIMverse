@@ -212,3 +212,23 @@ The four leftovers from the pass above are now covered (all toy-level):
 - **Seed 4, 40 kyr** (planet2, a740eab → v3): tech 1.0 → 1.0 (t_start 3640 both); pollution .10 → .10; net tech dT +0.50 → +0.31 K (GHG +.50, aerosol −.19); acidification 0 → .10; mitigation 0 → 0 (no crisis); mix fossil/renewable/nuclear .7/.2/.1; 2 polities (.25/.75), conflict 0; T_end 267.51 → 267.31 K; min pop 119 → 119, end pop 206 → 221; metabolism 2nd half mean .585 → .551 (σ .059 → .058); biomass 1.124 → 1.248; organics .82 → 1.10; redox −.53 → −1.00; no extinction.
 - **Test** `test_culture_leftovers_closed`: 2–4 polities with shares/level summing correctly, stress → conflict → extra kill; fossil-only vs renewable-only → >3× pollution and acidification, more greenhouse, renewables draw more; aerosols lower net dT (negative under extreme aerosol); acidification lowers capacity and final producers in a full run; `apply_chem` changes organics + redox and full-run organics differ vs `tech_chem=0`; mitigation rises under crisis, cuts fossil share, pollution and acidification vs `tech_mitigate=0`, stays 0 without crisis. Existing coupling and seed-4 metabolism tests unchanged and passing.
 - **Still out of scope**: full geopolitics/trade/diplomacy, detailed GCM aerosol/carbon-cycle chemistry (no real pH/carbonate system), real industrial LCA or sector economics.
+
+## Species churn / niches (improvement item 5)
+Seed 4 @ 40 kyr (`run_life --seed 4 --years 40000 --dt 20`, default knobs):
+
+| metric | before (f5130de) | after |
+|---|---|---|
+| species ever | 96 | **51** |
+| species alive (median / end / last-10 min / max) | 5 / 6 / 4 / 8 | 5 / 5 / 4 / 9 |
+| min pop (after warm-up) | 119 | 116 |
+| metabolism 2nd half (mean / std) | .551 / .058 | .514 / .071 |
+
+What drives churn: alive stays ~5, so the ~100 ids came from turnover (clusters vanish and come back under a fresh id), not from too many species at once.
+- `RECYCLE_R` 1.5 → **2.0**: a new cluster takes a recently vanished id (inside `RECENT_YR`) when its centroid is within 2 × cut. This is the main lever.
+- `SPLIT_SEP = .8` (new): a daughter cluster only gets a new id if its centroid is ≥ .8 × cut from its parent cluster's centroid. Otherwise it merges back under the parent id (merge pressure, so near-twins don't count as a split).
+- `SOFT_MAX = 10`, `SOFT_K = .5` (new): a soft cap. Above 10 living ids, the daughter-size bar `NEW_SPECIES_FRAC` goes up by 50% for each extra id. There's no hard ceiling, so allopatry can still found species. It doesn't trigger on seed 4; it's a guard only.
+- Unchanged: `SPECIES_EVERY`, `CL_CUT`, `NEW_SPECIES_FRAC`, `NICHE_ALPHA`, niche grid, `speciation_dist`.
+
+Sweep notes: raising `NICHE_ALPHA` to 1.1–1.2 *raises* species ever (114–128) because rare niches survive and split more. Raising `NEW_SPECIES_FRAC` to ≥ .08 or `SPECIES_EVERY` to 1000 drops alive to 1–3, and a soft cap at ≤ 6 collapses to a single species. So I kept niche crowding as it was and went through id hysteresis and recycling.
+- Test: `test_cold_spell_floor_species_churn_metabolism_seed4` now asserts species ever ≤ 70 (was ≤ 120), median alive 3–12, and ≥ 3 alive over the last 10 samples. Full suite: 48 passed.
+- Leftovers: species ever is quite sensitive to these knobs (for example `RECYCLE_R` 2.5 gives 38, 3.5 gives 13), and only seed 4 was tuned. A finer niche grid (more mobility/hardiness bands) is untried.

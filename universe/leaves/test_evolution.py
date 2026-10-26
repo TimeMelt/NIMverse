@@ -163,7 +163,7 @@ def test_cold_spell_floor_species_churn_metabolism_seed4():
     pl = _demo(); e = pl["evolution"]; s = e["evolution_series"]
     n = np.array([x["n_alive"] for x in s]); sa = np.array([x["n_species_alive"] for x in s])
     assert n[-1] > 0 and n[3:].min() >= 80, n.min()                   # cold spells no longer shrink to ~30 (founders = 40)
-    assert e["n_species_ever"] <= 120 and 3 <= np.median(sa) <= 15, (e["n_species_ever"], np.median(sa))
+    assert e["n_species_ever"] <= 70 and 3 <= np.median(sa) <= 12 and sa[-10:].min() >= 3, (e["n_species_ever"], np.median(sa))
     m = np.array([x["trait_means"]["metabolism_eff"] for x in s]); h = len(m)//2
     assert m[3:].std() < .08 and m[h:].std() < .08 and np.ptp(m[h:]) < .35 and .2 < m[h:].mean() < .8, (m[:h].std(), m[h:].std(), m[h:].mean())   # was std .12, .5-.84 swings
     assert .45 < m[h:].mean() < .72 and m[h:].std() <= 1.15*m[3:h].std(), (m[h:].mean(), m[3:h].std(), m[h:].std())   # mid-range (was .39), not boom-bust
