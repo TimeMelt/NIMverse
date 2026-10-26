@@ -26,6 +26,10 @@ def step(h, hw, LP=None, dt_w_yr=1., stress=None):
     st = dict(uv=uvn, flare=float(hw.flare_rate), flare_duty=duty, xray=float(getattr(hw, "xray_now", 0.)),
               uv_kill=float(min(.5, .05*max(0., uvn/max(hw.uv_proxy, 1e-9) - 1.))),   # flare UV sterilises surface fraction
               impact=float(h.impact_flux), season_K=float(season))
+    if getattr(hw, "hz_in_now", 0.) > 0:                         # moving HZ from the evolving host (orbit a fixed)
+        Ln = float(getattr(hw, "L_now", hw.L_star)); inz = bool(hw.hz_in_now <= h.a <= hw.hz_out_now)
+        st.update(L_host=Ln, irradiance_now=float(Ln/max(h.a, 1e-9)**2), hz_in_now=float(hw.hz_in_now), hz_out_now=float(hw.hz_out_now),
+                  in_hz_now=inz, hz_drift=bool(inz != bool(h.in_hz)))
     st.update(stress or {}); return ClimateStress(float(T), w, cls, st)
 
 def impacts(h, LP, rng, dt_w_yr=1.):

@@ -133,3 +133,23 @@ Seed scan 0–19 (40 kyr, dt 20, defaults): **4/20 → 12/20** with life.
 - Leftovers: 1, 5, 16(outer), 17(outer) ice worlds are 187–199 K (true snowballs, kept sterile); 10 (238 K ocean) and 11 (232 K terran) stay below brine water thresholds; 0, 2, 9, 18 have no rocky world within the widened HZ margin (gas giants / far ice).
 - seed 4 @ 40 kyr: life (abiogenesis t = 1480 yr, was 4780), min pop 117 (was 126), metabolism 2nd half .53 (was .53), no extinction; 7 species alive at end.
 - Tests: `test_desert_near_hz_reaches_polymer_ready`, `test_abiogenesis_fires_when_ready_40kyr` (200 rng seeds, ≥90%), `test_multiseed_ready_proxy` (≥10/20 seeds have a polymer+vesicle-ready candidate; ice worlds stay sterile).
+
+## Stellar evolution + HostWeather depth
+
+`universe/leaves/stellar.py` adds a toy main-sequence track (no post-MS, no spectra). `HostWeather.step` now calls `evolve()` to age the star first, then adds Poisson flares on top of the evolved baseline (`L_now = L_star(t)·(1+flare)`, `uv_now` from the evolved `uv_proxy`).
+
+- **Track:** `t_MS = 10 Gyr·M^-2.5`. With fractional age `x = age/t_MS`, `L ∝ 1/(1+0.4(1−x/0.457))`, which is the Gough faint-young-Sun law. Under it the Sun starts at ZAMS L≈0.7 and brightens ~8–9 %/Gyr today, while M dwarfs stay almost flat (0.3 Msun gains <2 % in 3.4 Gyr) and heavier stars evolve faster. `Teff ∝ L^0.1`, `R` comes from `L = R²Teff⁴`, and `uv_proxy = (Teff/5800)⁴`. The `(L, Teff, flare_rate)` passed to `from_star` is the star's state at the initial age, and the track only rescales it.
+- **Activity:** for M ≥ 0.6, `flare_rate ∝ age^-1/2` (Skumanich). Fully convective M < 0.6 stars stay saturated (flat rate) for `8 Gyr·(0.6/M)`.
+- **Wind:** `dM_star` adds up over stellar time (`mdot·dt·max(1, evolve·age_rate)`), and the track reads `M_star+dM_star`.
+- **Knobs (LIFE_SPACE):**
+  - `stellar_age_Gyr` (0.05–12, default 4.6): initial age, capped at 0.9·t_MS so the star is still on the MS.
+  - `stellar_evolve` (0–1, default **0**): scale on dL/dt.
+  - `stellar_age_rate` (1–1e6, default 1): stellar years per world year. For example, 1e6 makes a 4 kyr run cover 4 Gyr.
+- **HZ / climate coupling:** HostWeather keeps `hz_in_now/hz_out_now = 0.95/1.67·√L_star`. `world.step` already uses `L_now` for teq, and its stressors now also report `L_host`, `irradiance_now`, `hz_in_now`, `hz_out_now`, `in_hz_now` and `hz_drift`. `hz_drift` is True once the planet (orbit `a` fixed) leaves or enters the moving HZ relative to the snapshot `in_hz`.
+- **Host summary fields:**
+  - Before: M, L, flare_rate, n_flares, dM, uv_mean/max, flare_steps, hist_tail, distance.
+  - Now also: `T_eff, R_star, uv_proxy, age_Gyr, age0_Gyr, t_ms_Gyr, L0, dL_frac, hz_in_now, hz_out_now, L_track` ([t_w, age, L, Teff], ≤~65 points).
+- **Effect (1 Msun, a=1, no drift, 4 kyr, `stellar_evolve=1, stellar_age_rate=1e6`):** age goes 4.6→8.6 Gyr, L +54 %, Teff 5800→6056 K, uv_proxy 1.19, flare_rate .05→.037, HZ 0.95–1.67 → 1.18–2.07 AU, so `hz_drift` becomes True. Planet T climbs from a first-quarter mean of 290.7 K to a last-quarter mean of 312.4 K; the control stays flat at 287.8 K.
+- **Defaults:** `stellar_evolve=0` keeps the star fixed. At the real rate (`evolve=1, rate=1`), 40 kyr changes L by only ~1e-5, but even that perturbation chaotically shifts the seed-4 trajectory past a borderline metabolism-std assertion. With the default of 0, seed-4 is bit-identical to before: life on planet2, min pop 117, 2nd-half metabolism mean 0.53, no extinction. The seed-4 host (1.45 Msun, t_MS 3.9 Gyr) is anchored at age 3.53 Gyr.
+- Tests: `test_stellar_ms_track_unit`, `test_hostweather_stellar_evolve_and_fixed`, `test_stellar_brightening_warms_climate`.
+- Leftovers: no post-MS (subgiant/RGB), no spectra/blackbody UV bands, the habitat snapshot `hz_in/hz_out/irradiance` stays fixed (the live values are in the stressors), and there is no MS-age prior from the system generator.

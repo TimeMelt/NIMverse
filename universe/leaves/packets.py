@@ -1,5 +1,6 @@
 """Typed interface packets between leaves. All are dataclasses with .to_dict() for JSON."""
 from dataclasses import dataclass, field, asdict
+from . import stellar
 from .params import LIFE_SPACE, LIFE_DEFAULTS, clamp
 
 class _P:
@@ -21,24 +22,47 @@ class HostWeather(_P):
     M_star: float = 1.; L_star: float = 1.; T_eff: float = 5800.; dM_star: float = 0.; flare_rate: float = 0.; uv_proxy: float = 1.
     flare_dur_yr: float = 1e-3; flare_duty: float = 0.; L_now: float = 1.; uv_now: float = 1.; xray_now: float = 0.
     n_flares: int = 0; irr_hist: list = field(default_factory=list); hist_len: int = 64; distance_pc: float = 10.
+    age_Gyr: float = -1.; age0_Gyr: float = -1.; L0: float = 0.; T0: float = 0.; fr0: float = 0.; R_star: float = 1.
+    hz_in_now: float = 0.; hz_out_now: float = 0.; L_track: list = field(default_factory=list); track_every: float = 200.
     @classmethod
     def from_star(cls, M, L, T, distance_pc=10.):
-        fr = float(0.5/max(M, .08)**2 if M < .6 else .05); uv = float((T/5800.)**4)
-        return cls(M, L, T, 0., fr, uv, L_now=float(L), uv_now=uv, distance_pc=float(distance_pc))
+        fr = float(0.5/max(M, .08)**2 if M < .6 else .05); uv = float((T/5800.)**4); hi, ho = stellar.hz(L)
+        return cls(M, L, T, 0., fr, uv, L_now=float(L), uv_now=uv, distance_pc=float(distance_pc), hz_in_now=hi, hz_out_now=ho)
     def mdot(self): return 2e-14*self.L_star**.5*(1 + 10*self.flare_rate)      # Msun/yr, solar wind ~2e-14
+    def evolve(self, t, dt, P):
+        """Advance the MS track by dt world-yr x stellar_age_rate x stellar_evolve; rescale L, Teff, R, uv_proxy, flare_rate, HZ.
+        The (L, Teff, flare_rate) given to from_star are anchored to the star's age at the first call (knob stellar_age_Gyr)."""
+        if self.age0_Gyr < 0:
+            self.age0_Gyr = self.age_Gyr = float(min(P["stellar_age_Gyr"], .9*stellar.t_ms_Gyr(self.M_star)));   # still on the MS (no post-MS track)
+            self.L0, self.T0, self.fr0 = self.L_star, self.T_eff, self.flare_rate
+        ev = P["stellar_evolve"]*P["stellar_age_rate"]
+        if ev > 0:
+            self.age_Gyr += dt*1e-9*ev; M = self.M_star + self.dM_star
+            self.L_star, self.T_eff, self.R_star = stellar.track(M, self.L0, self.T0, self.age0_Gyr, self.age_Gyr)
+            self.uv_proxy = float((self.T_eff/5800.)**4); self.flare_rate = self.fr0*stellar.activity_factor(M, self.age0_Gyr, self.age_Gyr)
+        self.hz_in_now, self.hz_out_now = stellar.hz(self.L_star)
+        if not self.L_track or t - self.L_track[-1][0] >= self.track_every:
+            self.L_track.append([float(t), float(self.age_Gyr), float(self.L_star), float(self.T_eff)]); del self.L_track[:-256]
+        return max(1., ev)
     def step(self, t, dt, rng, LP=None):
-        P = as_bus(LP); lam = self.flare_rate*P["flare_rate_mult"]*dt; n = int(rng.poisson(lam)) if lam > 0 else 0
+        P = as_bus(LP); acc = self.evolve(t, dt, P)
+        lam = self.flare_rate*P["flare_rate_mult"]*dt; n = int(rng.poisson(lam)) if lam > 0 else 0
         duty = min(1., n*self.flare_dur_yr/max(dt, 1e-9)); amp = P["flare_amp"]
         self.flare_duty = float(duty); self.n_flares += n
         self.uv_now = float(self.uv_proxy*(1 + amp*duty)); self.xray_now = float(amp*duty*(1 + 4*(self.M_star < .6)))
-        self.L_now = float(self.L_star*(1 + .01*amp*duty)); self.dM_star -= self.mdot()*dt
+        self.L_now = float(self.L_star*(1 + .01*amp*duty)); self.dM_star -= self.mdot()*dt*acc   # wind integrates over stellar time
         self.irr_hist.append([float(t), self.L_now, self.uv_now, self.xray_now, int(n)]); del self.irr_hist[:-self.hist_len]
         return self
+    def in_hz(self, a): return bool(self.hz_in_now <= a <= self.hz_out_now)
     def summary(self):
-        h = self.irr_hist; u = [x[2] for x in h]
-        return dict(M_star=self.M_star, L_star=self.L_star, flare_rate=self.flare_rate, n_flares=self.n_flares, dM_star=self.dM_star,
+        h = self.irr_hist; u = [x[2] for x in h]; tr = self.L_track
+        return dict(M_star=self.M_star, L_star=self.L_star, T_eff=self.T_eff, R_star=self.R_star, uv_proxy=self.uv_proxy,
+                    flare_rate=self.flare_rate, n_flares=self.n_flares, dM_star=self.dM_star,
                     uv_mean=float(sum(u)/len(u)) if u else self.uv_proxy, uv_max=float(max(u)) if u else self.uv_proxy,
-                    flare_steps=int(sum(x[4] > 0 for x in h)), hist_tail=h[-8:], distance_pc=self.distance_pc)
+                    flare_steps=int(sum(x[4] > 0 for x in h)), hist_tail=h[-8:], distance_pc=self.distance_pc,
+                    age_Gyr=self.age_Gyr, age0_Gyr=self.age0_Gyr, t_ms_Gyr=stellar.t_ms_Gyr(self.M_star), L0=self.L0 or self.L_star,
+                    dL_frac=float(self.L_star/self.L0 - 1) if self.L0 else 0., hz_in_now=self.hz_in_now, hz_out_now=self.hz_out_now,
+                    L_track=tr[::max(1, len(tr)//64)] + (tr[-1:] if tr and (len(tr) - 1) % max(1, len(tr)//64) else []))
 
 @dataclass
 class HabitatState(_P):

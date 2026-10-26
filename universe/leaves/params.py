@@ -16,13 +16,15 @@ LIFE_SPACE = {
     "sex_rate": (0., 1.), "climate_drift": (0., 1.), "impact_refuge": (0., .5),
     # host weather (flares)
     "flare_rate_mult": (0., 5.), "flare_amp": (0., 10.),
+    # stellar evolution: initial MS age (Gyr), dL/dt scale (1 = real rate), time compression (stellar Gyr per world Gyr)
+    "stellar_age_Gyr": (.05, 12.), "stellar_evolve": (0., 1.), "stellar_age_rate": (1., 1e6),
     # impacts (scale on HabitatState.impact_flux; kill = biomass fraction lost per unit shock)
     "impact_scale": (0., 20.), "impact_kill": (0., 1.),
     # culture / tech
     "tech_rate": (0., 1e-2), "tech_threshold": (.1, 2.),
 }
 LIFE_DEFAULTS = {k: (lo+hi)/2 for k, (lo, hi) in LIFE_SPACE.items()}
-LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=4e-4, snowball_K=238., organic_thresh=.18, flare_rate_mult=1., flare_amp=2., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5,
+LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=4e-4, snowball_K=238., organic_thresh=.18, flare_rate_mult=1., flare_amp=2., stellar_age_Gyr=4.6, stellar_evolve=0., stellar_age_rate=1., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5,
                      evolution_rate=1., pop_cap=300., sel_strength=1., speciation_dist=.4,
                      sex_rate=.3, climate_drift=.5, impact_refuge=.05)
 TRAITS = ("metabolism_eff", "mobility", "reproduction_rate", "hardiness")

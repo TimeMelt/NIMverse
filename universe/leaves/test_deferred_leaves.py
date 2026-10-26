@@ -88,3 +88,35 @@ def test_system_hook_and_learn_life(tmp_path=None):
 if __name__ == "__main__":
     for k, f in list(globals().items()):
         if k.startswith("test_"): f(); print("ok", k)
+
+def test_stellar_ms_track_unit():
+    from . import stellar
+    assert stellar.t_ms_Gyr(1.5) < stellar.t_ms_Gyr(1.) < stellar.t_ms_Gyr(.3)              # higher mass evolves faster
+    L1 = [stellar.track(1., 1., 5800., 4.6, a)[0] for a in (1., 4.6, 6., 8.)]
+    assert all(b > a for a, b in zip(L1, L1[1:])) and .6 < L1[0] < .85 and 1.05 < L1[2] < 1.2   # Sun brightens ~8%/Gyr
+    assert abs(stellar.track(.3, .01, 3400., 4.6, 8.)[0]/.01 - 1) < .02                     # M dwarf ~flat
+    dLhi = stellar.track(1.3, 2., 6400., 1., 2.)[0]/2. - 1; dLsun = stellar.track(1., 1., 5800., 1., 2.)[0] - 1
+    assert dLhi > dLsun > 0
+    assert stellar.activity_factor(1., 4.6, 8.) < 1 < stellar.activity_factor(1., 4.6, 1.)   # Skumanich spin-down
+    assert stellar.activity_factor(.3, 1., 8.) == 1.                                          # M dwarf stays active
+
+def test_hostweather_stellar_evolve_and_fixed():
+    r = np.random.default_rng(0); s = HostWeather.from_star(1., 1., 5800.)
+    P = LifeParamBus({"stellar_evolve": 1., "stellar_age_rate": 1e6, "flare_rate_mult": 0.})
+    for k in range(400): s.step(k*10., 10., r, P)                                          # 4 Gyr of stellar time
+    sm = s.summary(); assert abs(sm["age_Gyr"] - 8.6) < 1e-6 and sm["dL_frac"] > .2 and s.uv_proxy > 1.05 and s.T_eff > 5800
+    assert sm["hz_in_now"] > .95 and s.flare_rate < .05 and len(sm["L_track"]) > 2 and abs(sm["L_track"][-1][2]/s.L_star - 1) < .05
+    f = HostWeather.from_star(1., 1., 5800.); F = LifeParamBus({"stellar_evolve": 0.})
+    for k in range(400): f.step(k*10., 10., r, F)
+    assert f.L_star == 1. and f.uv_proxy == 1. and f.T_eff == 5800. and f.summary()["dL_frac"] == 0.
+    assert all(.999 <= x[1] for x in f.irr_hist)                                           # only flare wobble on L_now
+
+def test_stellar_brightening_warms_climate():
+    h = hab(1.); base = dict(climate_drift=0., impact_scale=0., flare_rate_mult=0.)
+    def run(**k):
+        return run_habitat(h, SUN, LifeParamBus(dict(base, **k)), np.random.default_rng(3), 4000, 10., plant=True, culture=False)
+    ev, ctl = run(stellar_evolve=1., stellar_age_rate=1e6), run(stellar_evolve=0.)
+    T = lambda r: np.array([x[1] for x in r["climate_history"]["series"]])
+    Te, Tc = T(ev), T(ctl); q = len(Te)//4
+    assert Te[-q:].mean() - Te[:q].mean() > 10. and abs(Tc[-q:].mean() - Tc[:q].mean()) < 1e-6
+    assert ev["host"]["dL_frac"] > .2 and ctl["host"]["dL_frac"] == 0. and ev["climate"]["stressors"]["hz_in_now"] > ctl["climate"]["stressors"]["hz_in_now"]
