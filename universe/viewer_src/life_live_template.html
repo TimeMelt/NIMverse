@@ -4,7 +4,11 @@ html,body{margin:0;height:100%;overflow:hidden;background:#000;font:13px system-
 #info{position:absolute;left:12px;top:36px;max-width:300px;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:8px;line-height:1.45}
 #sel{position:absolute;right:10px;top:10px;max-width:300px;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:8px;line-height:1.45;display:none}
 #conn{position:absolute;right:12px;bottom:10px;font-size:12px;color:#fb6}
+#ctl{position:absolute;left:50%;transform:translateX(-50%);bottom:28px;background:rgba(10,14,24,.78);border:1px solid #234;border-radius:8px;padding:6px 10px;line-height:1.9;text-align:center}
+#ctl button{background:#1a2638;color:#cde;border:1px solid #345;border-radius:4px;padding:2px 7px;cursor:pointer}
+#badge{font-weight:700;padding:1px 6px;border-radius:4px}.live{background:#163;color:#8f8}.pau{background:#541;color:#fc8}.rep{background:#615;color:#fbe}
+#planets{position:absolute;right:10px;bottom:40px;max-width:340px;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:8px;line-height:1.5;display:none}.pl{cursor:pointer}.pl.on{color:#8fc}
 #help{position:absolute;left:12px;bottom:10px;color:#789;font-size:11px} b{color:#8fc}
-</style></head><body><div id="mode"></div><div id="conn">connecting…</div><div id="info"></div><div id="sel"></div>
-<div id="help">drag: orbit · scroll: zoom · click a creature: traits · keys 1 orbit · 3 next creature · space pause view updates</div>
+</style></head><body><div id="mode"></div><div id="conn">connecting…</div><div id="info"></div><div id="sel"></div><div id="ctl"></div><div id="planets"></div>
+<div id="help">drag: orbit · scroll: zoom · click a creature: traits · keys 1 orbit · 3 next creature · space pause/resume sim · shift+space freeze view · ←/→ history (shift ×10) · L live · [ ] planet · T trails</div>
 <script>/*THREE*/</script><script>/*ORBIT*/</script><script>/*SHADERS*/</script><script>/*APP*/</script></body></html>
