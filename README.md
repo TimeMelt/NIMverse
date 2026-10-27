@@ -334,3 +334,18 @@ Leftovers: QrnLOpt optimizer skipped (SPSA only); training on full seeds 0–19 
   The one held-out extinction under all sets is seed 11. Before the plantable filter, the old table read defaults held 1.95 (3 ext) and seed4_20k rec/ext .5. The learned set with impacts on beats the impact-off cheat on held-out data and on seed4_20k. LIFE_DEFAULTS are **not** overwritten because the margin is too small. Use `--params results/learned_life.json` to opt in.
 - **QrnLOpt** stays skipped on purpose. The pennylane/QrnLOpt meshes cost seconds per eval, while each SPSA loss here is about 20 s of multi-seed 4 kyr runs, so it is too heavy for the inner loop and is not wired in.
 - Still open: held-out seed 11 extinction; full 0–19 training (still expensive, about 1 min/iter for 10 seeds).
+
+## Continuous (live streaming) life mode
+
+`run_life` runs a fixed `--years` and writes JSON, and `viewer_life` bakes a static HTML from it. `run_life_live` runs **open-ended** instead: the primary plantable habitat (in-HZ first, then the most liquid water; seed 4 → planet2 ocean; override with `--planet`) steps forever and streams ticks to a live viewer over **localhost** Server-Sent Events. This uses stdlib `http.server`. It is not a cloud service and has no auth.
+
+    PYTHONPATH=.:/workspace/NIM python -m universe.run_life_live --seed 4 --dt 20 [--port 8765] [--emit-every 1] [--realtime-s 0.05] [--max-years 0] [--plant] [--no-culture] [--planet planet2] [--max-show 48]
+    # open http://127.0.0.1:8765/   ·  Ctrl+C stops
+
+- `GET /`: live Three.js viewer (`viewer_src/life_live_template.html` + `life_live.js`). It uses the same planet shaders and creature style as `viewer_life`, plus a HUD and connection status.
+- `GET /stream`: `text/event-stream`. Each event is `data: {tick}`. Slow clients skip to the latest tick. When `--max-years` is reached the server sends `event: end`.
+- `GET /snapshot`: latest tick JSON. `GET /info`: run info and planet look.
+- Tick: `{t_w, step, planet, ptype, climate:{T_K,water,cls}, biomass, alive, biosign:{o2,ch4,pigments,tech,h2o}, tech, culture:{level,active,pollution,warm_K,polities_n,footprint}, n_alive, n_species, births, impacts, creatures:[{id,lat,lon,species_id,plan,size,traits,generation,age,parent_id,...}]}`. Creatures are a stable id-hashed subset of up to `--max-show` living individuals, built with `creature_look.creatures_from_individuals` with no trails or graveyard (about 30 KB per tick at 48).
+- `--realtime-s` is the sleep between emits (0 = as fast as the CPU allows). `--max-years 0` means unbounded.
+- Core: `leaves/life_loop.HabitatRun` (`step()` / `frames()` / `tick()` / `report()`). `run_habitat` is now a thin finite wrapper around it and produces bit-identical reports. `run_habitat_continuous(...)` is the open-ended generator.
+- Unlike `life_loop`, live mode runs one habitat with its own `default_rng(seed)` and no observer catalog, so its trajectory is not the same draw sequence as planet2 inside a finite `run_life`.
