@@ -6,10 +6,12 @@ python -m universe.run_life_live --seed 4 --dt 20 [--port 8765] [--emit-every 1]
   GET /info     run info (seed, planets + looks, dt, paused, realtime_s, ...)
   GET /state    paused / realtime_s / mode (live|replay) / history range
   GET /history?from=SEQ&to=SEQ[&creatures=0]  ring buffer of the last --history ticks
-  POST /control {action: pause|resume|toggle|set_speed(speed|realtime_s)|seek(seq)|rewind(steps)|forward(steps)|live}
+  POST /control {action: pause|resume|toggle|set_speed(speed|realtime_s)|seek(seq[,physics])|restore(seq)|rewind(steps)|forward(steps)|live}
+  --token SECRET / --token-env VAR / --auth (auto-generate): every endpoint but GET / needs `Authorization: Bearer T` or `?token=T` (else 401)
+  --ckpt-every N / --ckpt-depth D: physics checkpoints every N emits; restore(seq) = true branch point (restore + deterministic fast-forward)
   --multi streams every plantable candidate in lockstep: {t_w, step, focus, planets:[tick...]}
 Ctrl+C stops.  Unlike run_life (fixed --years -> JSON) this never needs an end time; --max-years caps it (0 = unbounded)."""
-import argparse, collections, json, os, threading, time, zlib, numpy as np
+import argparse, collections, copy, hmac, json, os, secrets, threading, time, zlib, numpy as np
 from urllib.parse import parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from .sim2 import make_system, DEFAULTS
@@ -49,7 +51,7 @@ class LiveSim:
     """Steps one (default) or all plantable habitats (multi=True) in lockstep, with server-side pause/speed and a ring-buffer history.
     Single mode: payload is the plain HabitatRun.tick (+ seq/paused/... meta), unchanged default_rng(seed) trajectory.
     Multi mode: payload = {t_w, step, focus, planets:[tick per planet], + meta}."""
-    def __init__(self, seed=4, dt=20., plant=False, culture=True, params=None, config=None, distance_pc=10., planet=None, max_show=48, rng="numpy", multi=False, history=200, realtime_s=.05):
+    def __init__(self, seed=4, dt=20., plant=False, culture=True, params=None, config=None, distance_pc=10., planet=None, max_show=48, rng="numpy", multi=False, history=200, realtime_s=.05, ckpt_every=10, ckpt_depth=None, trail_max=24):
         C = json.load(open(config or os.path.join(HERE, "config3.json"))); C = {**C, "asteroids": C.get("eval", {}).get("asteroids", 40)}
         if rng == "nim": from .nim_rng import NIMRandom
         r = NIMRandom(seed) if rng == "nim" else np.random.default_rng(seed)
@@ -70,6 +72,11 @@ class LiveSim:
         self.latest = None; self.seq = 0; self.cv = threading.Condition(); self.stop_ev = threading.Event(); self.done = False
         self.paused = False; self.realtime_s = float(realtime_s); self.base_realtime_s = float(realtime_s); self.wake = threading.Event()
         self.hist = collections.deque(maxlen=max(1, int(history))); self.replay = None; self.version = 0
+        self.trail_max = int(trail_max); self.emit_every = 1; self.restored = None
+        # physics checkpoints: {seq: deepcopy(runs)} every ckpt_every emits (seq 0 = initial state). step_lock serialises stepping vs restore.
+        self.ckpt_every = max(0, int(ckpt_every)); self.ckpts = collections.OrderedDict(); self.step_lock = threading.Lock()
+        self.ckpt_depth = max(1, int(ckpt_depth if ckpt_depth else max(2, int(history)//max(1, self.ckpt_every) + 2)))
+        if self.ckpt_every: self._checkpoint(0)
 
     # ---- state / control ----
     def _meta(self):
@@ -81,9 +88,47 @@ class LiveSim:
             tk = self.latest if self.replay is None else next((x for x in self.hist if x["seq"] == self.replay), self.latest)
             return None if tk is None else {**tk, **self._meta()}
     def state(self):
-        with self.cv: return dict(self._meta(), replay_seq=self.replay, done=self.done, multi=self.multi, n_planets=len(self.runs))
+        with self.cv: return dict(self._meta(), replay_seq=self.replay, done=self.done, multi=self.multi, n_planets=len(self.runs), ckpt_every=self.ckpt_every, ckpts=list(self.ckpts))
+    def _checkpoint(self, seq):
+        """Deep copy of every HabitatRun (biosphere, chem, culture, climate history, Population arrays incl. trails, rng/drng/orng
+        bit-generator state, HostWeather copy, k / series ...). No creature/mesh data: ticks are rebuilt from state."""
+        self.ckpts[seq] = copy.deepcopy(self.runs)
+        while len(self.ckpts) > self.ckpt_depth + (0 in self.ckpts):     # seq-0 (initial state) is always kept on top of the ring
+            del self.ckpts[next(k for k in self.ckpts if k != 0)]
+    def _advance(self, ee):
+        r0 = self.runs[0]
+        for _ in range(ee):
+            for run in self.runs: run.step()            # lockstep: same step index / world time on every planet
+            if r0.k % ee == 0: break
+    def _emit(self):
+        return self._payload([run.tick(self.seed, self.max_show, self.trail_max) for run in self.runs])
+    def restore(self, seq):
+        """TRUE reverse (relative to view-only buffer replay): restore the newest physics checkpoint <= seq, deterministically
+        fast-forward emits to reach seq exactly, make that the live frontier, discard history/checkpoints after seq, pause.
+        This is checkpoint restore + replay of the same RNG stream, NOT backward ODE integration. Resuming branches from there."""
+        if not self.ckpt_every: raise ValueError("checkpoints disabled (--ckpt-every 0)")
+        seq = int(seq)
+        with self.step_lock:
+            with self.cv:
+                seq = max(1, min(seq, self.seq)); cs = [c for c in self.ckpts if c <= seq]
+                if not cs: raise ValueError(f"no checkpoint <= seq {seq} (oldest {next(iter(self.ckpts), None)})")
+                c = max(cs); self.paused = True
+            runs = copy.deepcopy(self.ckpts[c])            # keep the checkpoint itself pristine for later restores
+            name = self.run.h.name; self.runs = runs; self.run = next(r for r in runs if r.h.name == name)
+            for _ in range(seq - c): self._advance(self.emit_every)
+            tk = self._emit(); tk["seq"] = seq
+            with self.cv:
+                self.seq = seq; self.latest = tk; self.replay = None
+                kept = [x for x in self.hist if x["seq"] < seq]; self.hist.clear(); self.hist.extend(kept); self.hist.append(tk)
+                for k in [k for k in self.ckpts if k > seq]: del self.ckpts[k]
+                self.restored = dict(seq=seq, from_ckpt=c, fast_forward=seq - c, t_w=tk["t_w"]); self._bump()
+        return dict(self.state(), restored=self.restored)
     def _bump(self): self.version += 1; self.cv.notify_all(); self.wake.set()
     def control(self, action, **kw):
+        if action == "restore" or (action == "seek" and str(kw.get("physics", "")).lower() in ("1", "true")):
+            return self.restore(kw["seq"])
+        return self._control(action, **kw)
+    def _control(self, action, **kw):
         """pause | resume | toggle | set_speed(speed=x relative to --realtime-s, or realtime_s=abs; 0 = max) | seek(seq) | rewind(steps) | forward(steps) | live."""
         with self.cv:
             if action == "pause": self.paused = True
@@ -114,23 +159,33 @@ class LiveSim:
 
     def loop(self, max_years=None, emit_every=1, realtime_s=None):
         if realtime_s is not None: self.realtime_s = self.base_realtime_s = float(realtime_s)
-        ee = max(1, int(emit_every)); r0 = self.runs[0]
+        ee = self.emit_every = max(1, int(emit_every))
         try:
-            while not self.stop_ev.is_set() and (max_years is None or max_years <= 0 or r0.t < max_years):
+            while not self.stop_ev.is_set() and (max_years is None or max_years <= 0 or self.runs[0].t < max_years):
                 with self.cv: self.cv.wait_for(lambda: not self.paused or self.stop_ev.is_set())
                 if self.stop_ev.is_set(): break
-                for _ in range(ee):
-                    for run in self.runs: run.step()            # lockstep: same step index / world time on every planet
-                    if r0.k % ee == 0: break
-                tk = self._payload([run.tick(self.seed, self.max_show) for run in self.runs])
-                with self.cv:
-                    self.seq += 1; tk["seq"] = self.seq; self.latest = tk; self.hist.append(tk); self._bump()
+                with self.step_lock:
+                    with self.cv:
+                        if self.paused: continue                # a restore/pause slipped in between
+                    self._advance(ee); tk = self._emit()
+                    with self.cv:
+                        self.seq += 1; tk["seq"] = self.seq; self.latest = tk; self.hist.append(tk)
+                        if self.ckpt_every and self.seq % self.ckpt_every == 0: self._checkpoint(self.seq)
+                        self._bump()
                 if self.realtime_s > 0: self.wake.clear(); self.wake.wait(self.realtime_s)
         finally:
             with self.cv: self.done = True; self._bump()
 
-def make_handler(sim):
+def make_handler(sim, token=None):
     class H(BaseHTTPRequestHandler):
+        def _authed(self, qs):
+            """No token -> open (unchanged). Else Bearer header or ?token= must match (constant-time); GET / is always served."""
+            if not token: return True
+            h = self.headers.get("Authorization") or ""; got = h[7:].strip() if h.lower().startswith("bearer ") else qs.get("token", "")
+            if hmac.compare_digest(str(got).encode(), token.encode()): return True
+            self.send_response(401); b = b'{"error":"unauthorized"}'
+            self.send_header("WWW-Authenticate", 'Bearer realm="nim-live"'); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+            return False
         protocol_version = "HTTP/1.1"
         def log_message(self, *a): pass
         def _send(self, code, body, ctype):
@@ -141,13 +196,15 @@ def make_handler(sim):
             p, _, q = self.path.partition("?")
             if p != "/control": return self._send(404, "not found", "text/plain")
             n = int(self.headers.get("Content-Length") or 0); body = self.rfile.read(n) if n else b""
+            qs = {k: v[-1] for k, v in parse_qs(q).items()}
+            if not self._authed(qs): return
             try:
                 d = json.loads(body) if body.strip() else {}
-                qs = {k: v[-1] for k, v in parse_qs(q).items()}
                 if not d.get("action"):          # query form: ?pause=1 / ?pause=0 / ?realtime_s=0.2 / ?speed=4 / ?seq=N / ?rewind=10 / ?live=1
                     if "pause" in qs: sim.control("pause" if qs["pause"] not in ("0", "false") else "resume")
                     if "realtime_s" in qs or "speed" in qs: sim.control("set_speed", realtime_s=qs.get("realtime_s"), speed=qs.get("speed", 1))
-                    if "seq" in qs: sim.control("seek", seq=qs["seq"])
+                    if "seq" in qs: sim.control("restore" if qs.get("physics") in ("1", "true") else "seek", seq=qs["seq"])
+                    if "restore" in qs: sim.control("restore", seq=qs["restore"])
                     if "rewind" in qs: sim.control("rewind", steps=qs["rewind"])
                     if "live" in qs: sim.control("live")
                     return self._json(200, sim.state())
@@ -156,6 +213,7 @@ def make_handler(sim):
         def do_GET(self):
             p, _, q = self.path.partition("?"); qs = {k: v[-1] for k, v in parse_qs(q).items()}
             if p == "/": return self._send(200, viewer_html(), "text/html; charset=utf-8")
+            if p in ("/info", "/state", "/snapshot", "/history", "/stream") and not self._authed(qs): return
             if p == "/info": return self._json(200, dict(sim.info, **sim.state()))
             if p == "/state": return self._json(200, sim.state())
             if p == "/snapshot": tk = sim.current(); return self._json(200 if tk else 503, tk or {})
@@ -187,9 +245,9 @@ def viewer_html():
         html = html.replace(key, val.replace("</script", "<\\/script"), 1)
     return html
 
-def serve(sim, port=8765, host="127.0.0.1", max_years=None, emit_every=1, realtime_s=None):
+def serve(sim, port=8765, host="127.0.0.1", max_years=None, emit_every=1, realtime_s=None, token=None):
     """Start sim + HTTP threads; returns (server, sim_thread). server.server_address[1] is the bound port (port=0 -> ephemeral)."""
-    srv = ThreadingHTTPServer((host, port), make_handler(sim)); srv.daemon_threads = True
+    srv = ThreadingHTTPServer((host, port), make_handler(sim, token)); srv.daemon_threads = True
     th = threading.Thread(target=sim.loop, args=(max_years, emit_every, realtime_s), daemon=True); th.start()
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, th
@@ -207,10 +265,21 @@ def main(argv=None):
     ap.add_argument("--params", default=None); ap.add_argument("--config", default=None); ap.add_argument("--planet", default=None)
     ap.add_argument("--max-show", type=int, default=48); ap.add_argument("--rng", default="numpy"); ap.add_argument("--distance-pc", type=float, default=10.)
     ap.add_argument("--multi", action="store_true", help="stream all plantable candidates in lockstep (--planet forces single)"); ap.add_argument("--history", type=int, default=200)
+    ap.add_argument("--ckpt-every", type=int, default=10, help="physics checkpoint every N emits (0 = off; restore needs it)")
+    ap.add_argument("--ckpt-depth", type=int, default=0, help="max checkpoints kept (0 = cover --history)")
+    ap.add_argument("--trail-max", type=int, default=24, help="server-side trail points per creature (0 = none)")
+    ap.add_argument("--token", default=None, help="require Bearer token / ?token= on every endpoint but /")
+    ap.add_argument("--token-env", default=None, help="read the token from this environment variable")
+    ap.add_argument("--auth", action="store_true", help="require a token; auto-generated and printed if --token/--token-env not given")
     a = ap.parse_args(argv)
-    sim = LiveSim(a.seed, a.dt, a.plant, a.culture, a.params, a.config, a.distance_pc, a.planet, a.max_show, a.rng, a.multi, a.history, a.realtime_s)
-    srv, th = serve(sim, a.port, a.host, a.max_years or None, a.emit_every, a.realtime_s)
-    print(f"live: {sim.info['title']} ({sim.info['ptype']}) -> http://{a.host}:{srv.server_address[1]}/  (Ctrl+C to stop)", flush=True)
+    token = a.token or (os.environ.get(a.token_env) if a.token_env else None)
+    if a.token_env and not token: ap.error(f"--token-env {a.token_env}: variable empty or unset")
+    if a.auth and not token: token = secrets.token_urlsafe(16)
+    sim = LiveSim(a.seed, a.dt, a.plant, a.culture, a.params, a.config, a.distance_pc, a.planet, a.max_show, a.rng, a.multi, a.history, a.realtime_s,
+                  a.ckpt_every, a.ckpt_depth or None, a.trail_max)
+    srv, th = serve(sim, a.port, a.host, a.max_years or None, a.emit_every, a.realtime_s, token)
+    q = f"?token={token}" if token else ""
+    print(f"live: {sim.info['title']} ({sim.info['ptype']}) -> http://{a.host}:{srv.server_address[1]}/{q}  (Ctrl+C to stop)" + ("  [auth on]" if token else ""), flush=True)
     try:
         while th.is_alive():
             th.join(5); tk = sim.latest

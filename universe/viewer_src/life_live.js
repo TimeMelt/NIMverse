@@ -1,7 +1,12 @@
 // NIM life LIVE: same planet shaders / creature style as life.js, but fed by Server-Sent Events from run_life_live (/info + /stream).
 (async function(){
 const V3=THREE.Vector3, W=()=>innerWidth, H=()=>innerHeight, f=(x,n=2)=>Number(x).toFixed(n);
-const info=await (await fetch('info')).json();
+// auth: token from ?token= in the page URL (or a prompt on 401, remembered in sessionStorage); sent as Bearer on fetch, ?token= on EventSource
+let TOKEN=new URLSearchParams(location.search).get('token')||sessionStorage.getItem('nim_token')||'';
+const AH=()=>TOKEN?{Authorization:'Bearer '+TOKEN}:{}; const TQ=u=>TOKEN?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(TOKEN):u;
+async function afetch(u,o={}){for(let i=0;i<3;i++){const r=await fetch(u,Object.assign({},o,{headers:Object.assign({},o.headers||{},AH())})); if(r.status!==401) return r;
+ TOKEN=prompt('NIM live: access token')||''; sessionStorage.setItem('nim_token',TOKEN);} throw new Error('unauthorized');}
+const info=await (await afetch('info')).json();
 const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setSize(W(),H()); document.body.appendChild(renderer.domElement);
 const camera=new THREE.PerspectiveCamera(50,W()/H(),.0005,5000); const controls=new THREE.OrbitControls(camera,renderer.domElement); controls.enableDamping=true; controls.dampingFactor=.12;
 addEventListener('resize',()=>{camera.aspect=W()/H(); camera.updateProjectionMatrix(); renderer.setSize(W(),H());});
@@ -49,11 +54,13 @@ function build(c){const g=new THREE.Group(), body=new THREE.Group(); g.add(body)
 function dispose(cr){scene.remove(cr.g); if(cr.trail){scene.remove(cr.trail); cr.trail.geometry.dispose(); cr.trail.material.dispose();} cr.g.traverse(o=>{if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose();});}
 function sync(list){const seen=new Set();
  for(const c of list){seen.add(c.id); let cr=crs.get(c.id); if(!cr){cr=build(c); crs.set(c.id,cr);} else {cr.c=Object.assign(cr.c,{age:c.age,energy:c.energy,traits:c.traits,species_id:c.species_id}); const t=ll(c.lat,c.lon); if(t.distanceTo(cr.target)>1e-6){const mv=t.clone().sub(cr.p); mv.sub(cr.p.clone().multiplyScalar(mv.dot(cr.p))); if(mv.lengthSq()>1e-10) cr.fw=mv.normalize(); cr.target=t;} cr.dying=0;}
-  if(showTrails) pushTrail(cr);}
+  if(showTrails) pushTrail(cr,c);}
  for(const [id,cr] of crs) if(!seen.has(id)&&!cr.dying) cr.dying=performance.now();}
-// short trails: last TRAIL_N tick positions per creature (client-side, from the stream)
+// trails: server-side c.trail ([lat,lon] oldest->newest, from the individual's stored path) when present; else last TRAIL_N streamed positions
 const TRAIL_N=12; let showTrails=true;
-function pushTrail(cr){const h=(ALT[cr.c.plan]||1.005)*1.001; (cr.tp=cr.tp||[]).push(cr.target.clone().multiplyScalar(h)); if(cr.tp.length>TRAIL_N) cr.tp.shift();
+function pushTrail(cr,c){const h=(ALT[cr.c.plan]||1.005)*1.001;
+ if(c&&c.trail&&c.trail.length>=2) cr.tp=c.trail.map(q=>ll(q[0],q[1]).multiplyScalar(h));
+ else {(cr.tp=cr.tp||[]).push(cr.target.clone().multiplyScalar(h)); if(cr.tp.length>TRAIL_N) cr.tp.shift();}
  if(cr.tp.length<2) return; if(!cr.trail){cr.trail=new THREE.Line(new THREE.BufferGeometry(),new THREE.LineBasicMaterial({color:new THREE.Color(...cr.c.accent),transparent:true,opacity:.55})); scene.add(cr.trail);}
  cr.trail.geometry.setFromPoints(cr.tp);}
 function clearTrails(){for(const cr of crs.values()){cr.tp=[]; if(cr.trail){scene.remove(cr.trail); cr.trail.geometry.dispose(); cr.trail.material.dispose(); cr.trail=null;}}}
@@ -84,17 +91,20 @@ function render(){if(!lastRaw) return; const tk=pick(lastRaw); last=tk; sync(tk.
 function onTick(raw){st=raw; nTicks++; ctlHud(raw); if(frozen) return; const jump=lastRaw&&raw.seq!==lastRaw.seq+1; if(jump) clearTrails(); lastRaw=raw; render();}
 function setFocus(name){if(name===focus) return; focus=name; clearCreatures(); techLights(0,null); buildPlanet((planets.find(q=>q.planet===name)||planets[0]).look); render();}
 function cyclePlanet(d){const i=planets.findIndex(q=>q.planet===focus); setFocus(planets[(i+d+planets.length)%planets.length].planet);}
-async function control(body){try{const r=await fetch('control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json(); Object.assign(st,j); return j;}catch(e){console.error(e);}}
+async function control(body){try{const r=await afetch('control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json(); Object.assign(st,j); return j;}catch(e){console.error(e);}}
 let scrubbing=false;
 ctlE.innerHTML=`<span id="badge" class="live">LIVE</span> <button id="bp">❚❚ Pause</button> <button data-s="0.25">0.25×</button><button data-s="1">1×</button><button data-s="4">4×</button><button data-s="0">max</button> <span id="spd"></span><br>
- <button id="rw">◀ step</button><input id="scrub" type="range" min="0" max="0" value="0" style="width:180px;vertical-align:middle"><button id="fw">step ▶</button> <button id="lv">⏭ Return to live</button> <label><input id="tr" type="checkbox" checked> trails</label>`;
+ <button id="rw">◀ step</button><input id="scrub" type="range" min="0" max="0" value="0" style="width:180px;vertical-align:middle"><button id="fw">step ▶</button> <button id="lv">⏭ Return to live</button> <button id="rp" title="restore physics checkpoint at this seq and branch (R / Alt+scrub)">⟲ Restore physics here</button> <label><input id="tr" type="checkbox" checked> trails</label>`;
 document.getElementById('bp').onclick=()=>control({action:st.paused?'resume':'pause'});
 ctlE.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>control({action:'set_speed',speed:+b.dataset.s}));
 document.getElementById('rw').onclick=()=>control({action:'rewind',steps:1}); document.getElementById('fw').onclick=()=>control({action:'forward',steps:1});
 document.getElementById('lv').onclick=()=>control({action:'live'});
+let altDown=false; addEventListener('keydown',e=>{if(e.key==='Alt')altDown=true;}); addEventListener('keyup',e=>{if(e.key==='Alt')altDown=false;}); addEventListener('blur',()=>altDown=false);
+const restoreHere=()=>{const q=st.replay_seq!=null?st.replay_seq:(st.mode==='replay'&&lastRaw?lastRaw.seq:null); if(q!=null) control({action:'restore',seq:q});};
+document.getElementById('rp').onclick=restoreHere;
 document.getElementById('tr').onchange=e=>{showTrails=e.target.checked; if(!showTrails) clearTrails();};
-{const sl=document.getElementById('scrub'); sl.oninput=()=>{scrubbing=true; control({action:'seek',seq:+sl.value});}; sl.onchange=()=>{scrubbing=false;};}
-function connect(){const es=new EventSource('stream'); es.onopen=()=>{connE.textContent='● live'; connE.style.color='#8f8';};
+{const sl=document.getElementById('scrub'); sl.oninput=e=>{scrubbing=true; control({action:'seek',seq:+sl.value,physics:altDown});}; sl.onchange=()=>{scrubbing=false;};}
+function connect(){const es=new EventSource(TQ('stream')); es.onopen=()=>{connE.textContent='● live'; connE.style.color='#8f8';};
  es.onmessage=e=>{try{onTick(JSON.parse(e.data));}catch(err){console.error(err);}};
  es.addEventListener('end',()=>{connE.textContent='■ sim ended (max-years) · history still browsable'; connE.style.color='#fb6';});
  es.onerror=()=>{connE.textContent='○ reconnecting…'; connE.style.color='#f88';};}
@@ -106,7 +116,7 @@ const ray=new THREE.Raycaster(), mv=new THREE.Vector2();
 renderer.domElement.addEventListener('click',e=>{mv.set(e.clientX/W()*2-1,-e.clientY/H()*2+1); ray.setFromCamera(mv,camera); const ps=[]; for(const cr of crs.values()) cr.g.traverse(o=>{if(o.isMesh)ps.push(o);}); const h=ray.intersectObjects(ps,false); if(h.length) showSel(h[0].object.userData.id); else showSel(null);});
 addEventListener('keydown',e=>{if(e.key==='1'){sel=null; showSel(null); camera.position.set(0,.8,3); controls.target.set(0,0,0);} if(e.key==='3'){const ids=[...crs.keys()]; if(ids.length) showSel(ids[(ids.indexOf(sel)+1)%ids.length]);} if(e.key===' '){e.preventDefault(); if(e.shiftKey) frozen=!frozen; else control({action:'toggle'});}
  if(e.key==='ArrowLeft') control({action:'rewind',steps:e.shiftKey?10:1}); if(e.key==='ArrowRight') control({action:'forward',steps:e.shiftKey?10:1});
- if(e.key==='l'||e.key==='L') control({action:'live'}); if(e.key==='[') cyclePlanet(-1); if(e.key===']') cyclePlanet(1);
+ if(e.key==='l'||e.key==='L') control({action:'live'}); if(e.key==='r'||e.key==='R') restoreHere(); if(e.key==='[') cyclePlanet(-1); if(e.key===']') cyclePlanet(1);
  if(e.key==='t'||e.key==='T'){showTrails=!showTrails; document.getElementById('tr').checked=showTrails; if(!showTrails) clearTrails();}});
 camera.position.set(0,.8,3); controls.minDistance=1.02;
 function animate(now){requestAnimationFrame(animate); const t=(now-t0)/1000;

@@ -98,8 +98,9 @@ class HabitatRun:
             self.step()
             if self.k % max(1, int(emit_every)) == 0: yield self
 
-    def tick(self, seed=0, max_show=48):
-        """Small JSON-able live frame (see run_life_live)."""
+    def tick(self, seed=0, max_show=48, trail_max=24):
+        """Small JSON-able live frame (see run_life_live). Creatures carry the server-side movement trail
+        (oldest -> newest [lat, lon], last `trail_max` stored points + current position; 0 = no trails)."""
         from . import creature_look as CL
         clim, flux, cu, pop = self.clim, self.flux, self.cu, self.pop
         n_alive = len(pop) if pop is not None else 0
@@ -107,9 +108,11 @@ class HabitatRun:
         if n_alive:
             idx = np.argsort((pop.id.astype(np.uint64)*np.uint64(2654435761)) % np.uint64(2**32))[:max_show]   # stable hashed subset: same ids frame to frame
             inds = [pop.record(int(i)) for i in idx]
-            for d in inds: d.pop("trail", None)
+            for d in inds:
+                if trail_max and d.get("trail"): d["trail"] = d["trail"][-int(trail_max):]
+                else: d.pop("trail", None)
             crs = [{kk: c[kk] for kk in ("id", "lat", "lon", "species_id", "plan", "size", "limbs", "segments", "shell", "shell_k", "color", "accent", "glow", "speed", "wobble",
-                                          "phase", "heading", "traits", "generation", "age", "energy", "parent_id", "parent2_id")}
+                                          "phase", "heading", "traits", "generation", "age", "energy", "parent_id", "parent2_id", "trail") if kk in c}
                    for c in CL.creatures_from_individuals(inds, seed, flux.to_dict(), self.h.ptype, max_show)]
         cd = cu.to_dict() if self.culture else {}
         cult = dict(level=float(cu.level), active=bool(cu.active), pollution=float(cu.pollution), warm_K=float(self.tstress.get("tech_dT", 0.)),
