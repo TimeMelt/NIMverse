@@ -46,6 +46,7 @@ ACCL_MAX, ACCL_TAU = .15, 600.  # non-heritable acclimation (hardiness plasticit
 HAZ_SAT = 1.        # stress hazard ~ x/(1 + HAZ_SAT x): beyond tolerance organisms encyst rather than die linearly faster
 DORM_STRESS = .5     # under chronic stress, basal burn falls (torpor) by up to 50%
 FOOD_TAU = 5000.     # ecosystem storage (detritus/soil): food felt = lagged productivity cycle -> metabolism can't chase every phase
+REST_K = .3           # mind rest action: burn x (1 - REST_K rest), forage weight x (1 - 2 REST_K rest)
 TRAIL_K, TRAIL_EVERY = 24, 10.    # path history: last 24 positions, one per 10 yr (newborns inherit the parent's path = lineage track) for viewer replay    # frequency-dependent competition: food share / (phenotype-niche crowding)^alpha (rare niches pay)
 
 def need_of(tr):
@@ -211,16 +212,17 @@ def impact_deaths(pop, f, climate, P, rng):
         v = np.flatnonzero(dead); spare = v[np.argsort(-(pop.traits[v, H] + .2*rng.random(len(v))))[:short]]; dead[spare] = False
     return dead
 
-def step(pop, niche, climate, LP, rng, dt_w_yr=1., t_w=None, series_every=None, grave_k=200, h_max=1.):
+def step(pop, niche, climate, LP, rng, dt_w_yr=1., t_w=None, series_every=None, grave_k=200, h_max=1., mind=None):
     """Advance every individual by dt world-years (internal substeps <= h_max yr so demography is dt-stable).
-    Returns (pop, CreaturePacket) summed over substeps. Mutates `pop` in place."""
+    Returns (pop, CreaturePacket) summed over substeps. Mutates `pop` in place. `mind` (leaves.mind, default None): soft clamped
+    steering of movement / foraging / rest / mate choice; None or inactive -> identical code path and rng draws."""
     P = as_bus(LP); k = max(1, int(np.ceil(dt_w_yr/h_max - 1e-9))); h = float(dt_w_yr)/k; t1 = float(t_w if t_w is not None else pop.t + dt_w_yr)
     B = D = 0; f = shock_kill(climate); pop.T_K = float(climate.T_K)
     if f > 1e-3 and len(pop):
         n0 = len(pop); dead = impact_deaths(pop, f, climate, P, rng); D += int(dead.sum()); _bury(pop, dead, rng, grave_k, pop.t); pop.n_deaths += int(dead.sum())
         pop.impact_log.append(dict(t_w=float(pop.t), kill=round(f, 4), n_before=n0, n_after=len(pop)))
     for i in range(k):
-        b, d = _substep(pop, niche, climate, P, rng, h, t1 - (k-1-i)*h, grave_k); B += b; D += d
+        b, d = _substep(pop, niche, climate, P, rng, h, t1 - (k-1-i)*h, grave_k, mind); B += b; D += d
     if pop.t - pop.last_cluster_t >= SPECIES_EVERY - 1e-9: recluster(pop, P); pop.last_cluster_t = pop.t
     if series_every and pop.t - pop.last_series_t >= series_every - 1e-9: pop.series.append(pop.stats()); pop.last_series_t = pop.t
     s = pop.stats(); means = {t: v for t, v in s["trait_means"].items() if v is not None}; means["cohorts"] = float(s["n_species"])
@@ -264,22 +266,33 @@ def recluster(pop, P):
     pop.recent = {i: v for i, v in pop.recent.items() if pop.t - v[1] <= RECENT_YR}
     pop.species = new
 
-def _substep(pop, niche, climate, P, rng, dt, t, grave_k):
+def _substep(pop, niche, climate, P, rng, dt, t, grave_k, mind=None):
     n = len(pop); cap = int(P["pop_cap"]); sel = P["sel_strength"]; pop.t = float(t); births = deaths = 0
     off = env_drift(pop, P, rng, dt, climate)
     if n:
         tr = pop.traits; hard, met, mob, rep = tr[:, H], tr[:, MET], tr[:, MOB], tr[:, REP]
-        pop.pos = _jitter(pop.pos, .04*(.05 + mob)*np.sqrt(dt), rng)    # brownian walk on the sphere, step ~ mobility
+        acts = None
+        if mind is not None and getattr(mind, "active", False):     # mind: own rng only; decided on pre-move state
+            from . import mind as M
+            st0 = climate_stress(climate) + off + LAT_STRESS*(np.abs(pop.pos[:, 1]) - .5); f0 = (pop.food_buf if pop.food_buf is not None else max(0., niche.resources))*cap/max(n, 1)
+            acts = M.tick(mind, pop, st0, local_density(pop.pos), f0)
+        stp = .04*(.05 + mob)*np.sqrt(dt)
+        pop.pos = _jitter(pop.pos, stp, rng)    # brownian walk on the sphere, step ~ mobility
+        if acts is not None and np.any(acts[0]):
+            from .mind import tangent, MOVE_K
+            p = pop.pos + MOVE_K*stp[:, None]*tangent(pop.pos, acts[0]); pop.pos = p/np.linalg.norm(p, axis=1, keepdims=True)
         dens = local_density(pop.pos)
         need = need_of(tr)
         food = cap*dt*food_felt(pop, P, dt, niche.resources)       # stored food outlasts a producer crash by ~FOOD_TAU          # niche food shared by up to pop_cap organisms
         bonus = 2.2*mob/(mob + .3)*np.clip(dens, 0, 2)/2                    # saturating, only pays where crowded
         upt = uptake(tr); crowd = niche_crowding(tr, pop.pos)
         w = np.sqrt(need/(1 + .2*mob + .45*mob*mob))*(1 + bonus)*upt*(1 + .3*rng.random(n))/crowd**NICHE_ALPHA
+        if acts is not None: w = w*acts[1]*(1 - 2*REST_K*acts[3])     # forage effort (resting forages less)
         got = np.minimum(food*w/w.sum(), 1.5*upt*need*dt) if food > 0 else np.zeros(n)
         stress = climate_stress(climate) + off + LAT_STRESS*(np.abs(pop.pos[:, 1]) - .5)
         torpor = 1 - DORM_STRESS*np.clip(stress - .2, 0, 1)                 # cold/dry torpor lowers basal burn
         burn = .5*torpor if food > 1e-3*cap*dt else .5*(.4 - .3*hard)                # famine -> dormancy (hardy forms encyst deeper)
+        if acts is not None: burn = burn*(1 - REST_K*acts[3])
         pop.energy = np.clip(pop.energy + got - burn*need*dt, 0., E_MAX)
         starving = pop.energy <= 0
         exc = float(np.mean(np.maximum(0., stress - hard))); pop.accl += (min(ACCL_MAX, exc) - pop.accl)*(1 - np.exp(-dt/ACCL_TAU))
@@ -290,6 +303,7 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k):
         rate = P["eco_death"]*.5 + sel*.2*refuge*(x := np.maximum(0., stress - hard_eff))/(1 + HAZ_SAT*x) + (.25 if food > 1e-3*cap*dt else .03)*starving + juv
         dead = rng.random(n) < 1 - np.exp(-rate*dt); deaths = int(dead.sum())
         if deaths: _bury(pop, dead, rng, grave_k, pop.t)
+        if deaths and acts is not None: acts = tuple(x[~dead] for x in acts)
         n = len(pop)
     if n:
         tr = pop.traits; need = need_of(tr)
@@ -303,6 +317,7 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k):
             if len(sex):                                                   # mate: best of 8 random candidates (same species, nearby)
                 cand = rng.integers(n, size=(len(sex), 8)); p1 = par[sex]
                 score = np.arccos(np.clip((pop.pos[cand]*pop.pos[p1][:, None]).sum(-1), -1, 1)) + 10.*(pop.species[cand] != pop.species[p1][:, None]) + 100.*(cand == p1[:, None])
+                if acts is not None and len(acts[2]) == n: score = score - .5*np.log(acts[2][cand])     # mind: attractive mates preferred
                 m2 = cand[np.arange(len(sex)), np.argmin(score, 1)]; ok = m2 != p1; sex, m2 = sex[ok], m2[ok]
                 wb = rng.random((len(sex), len(TRAITS))); base[sex] = wb*tr[par[sex]] + (1 - wb)*tr[m2]; par2[sex] = pop.id[m2]; g[sex] = np.maximum(g[sex], pop.gen[m2]); pop.n_sexual += len(sex)
             sd = P["mutation_sd"]*P["evolution_rate"]*SPAN*np.where(rng.random((births, 1)) < .02, 5., 1.)   # rare big jumps

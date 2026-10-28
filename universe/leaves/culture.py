@@ -64,7 +64,7 @@ def _pollute(c, P, dt, mit_on=True):
         else: c.mitigation = float(max(0., c.mitigation - 2e-4*dt))
     elif not c.active: c.mitigation = float(max(0., c.mitigation - 2e-4*dt))
 
-def step(cu, bio, pkt, LP, rng, t_w, dt_w_yr=1., min_age=1000.):
+def step(cu, bio, pkt, LP, rng, t_w, dt_w_yr=1., min_age=1000., mind=None):
     P = as_bus(LP); c = Culture(**cu.to_dict()); c.draw = c.footprint = 0.; c.supply = 1.
     has_org = pkt is not None and pkt.n > 0
     c.org_age = c.org_age + dt_w_yr if has_org else 0.
@@ -89,6 +89,8 @@ def step(cu, bio, pkt, LP, rng, t_w, dt_w_yr=1., min_age=1000.):
         c.active = c.level > 1e-6
         for p in c.polities: p["level_contrib"] = float(p["share"]*c.level)
     _pollute(c, P, dt_w_yr, P["tech_mitigate"] > 0)
+    if mind is not None:
+        from .mind import culture_nudge; c = culture_nudge(mind, c, dt_w_yr)   # optional advisory (script culture_advise); None -> no-op
     return c
 
 def apply(bio, c):

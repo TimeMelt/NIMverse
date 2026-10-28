@@ -362,3 +362,31 @@ Leftovers: QrnLOpt optimizer skipped (SPSA only); training on full seeds 0–19 
 - **Restore physics (true reverse)**: `{"action":"restore","seq":N}`, `{"action":"seek","seq":N,"physics":true}` or `POST /control?restore=N`. This is **checkpoint restore**, not backward ODE integration. It is "true" only in contrast to buffer replay. Every `--ckpt-every` emits (default 10, 0 = off) the server deep-copies all `HabitatRun`s: biosphere, chemistry, culture, climate history, the `Population` arrays including trails, the main/drift/organism RNG bit-generator states, the HostWeather copy, step counters and series. It stores no creature or mesh data. Seq 0 (the initial state) is always kept, and `--ckpt-depth` caps the ring (default: enough to cover `--history`). On restore the server takes the newest checkpoint ≤ N and fast-forwards deterministically to N. The re-derived tick is bit-identical to the original. That state becomes the live frontier: history and checkpoints after N are discarded, replay is cleared, and the sim pauses. Resume branches from there. A checkpoint costs about 4 ms and 200 KB for 2 planets at 10 kyr; the series buffer grows with run length. Fast-forward costs at most `ckpt_every-1` emits.
 - **Auth**: `--token SECRET`, `--token-env VAR`, or `--auth` (generates a token and prints it in the URL). With a token set, `/info /state /snapshot /history /stream /control` need `Authorization: Bearer T` or `?token=T`, or they return 401. `GET /` always serves the viewer. The viewer reads `?token=` from its URL (or prompts on 401, kept in sessionStorage), sends it as a Bearer header on fetch/control, and as `?token=` on EventSource, which cannot set headers. Without a token, behaviour is unchanged. `--host 0.0.0.0` works, but traffic is plain HTTP, and a query-string token can leak into logs, history and Referer. Use TLS or an SSH tunnel off-box.
 - Previously open (auth, true reverse physics, server-side trails): closed.
+
+## Local mind / AI plug-in (optional, default off)
+`universe/leaves/mind.py` lets a mind give life forms some extra intelligence. A mind can be the built-in learner, a local LLM, or your own Python policy. With `--mind none` (the default), nothing changes: no extra RNG draws, and the output is bit-identical to the run without a mind (`test_mind.py::test_no_mind_bit_identical`; the seed-4 3 kyr `run_life` JSON has the same md5 as before).
+
+- **Physics stays in charge.** A mind only sends soft, clamped nudges, which `individuals._substep` applies:
+  - `move` is a tangent push of at most 1× the organism's own random-walk step.
+  - `forage` (0.5–1.5) scales the organism's competitive food weight. The total food and the uptake cap stay the same.
+  - `rest` (0–1) cuts basal burn by up to 30% and forage weight by up to 60%.
+  - `mate` (0.5–2) is the organism's attractiveness when partners pick a mate.
+- Every `--mind-every` world-years (default 20), up to `--mind-batch` organisms (default 16) are observed. The mind picks them at random, or by top energy with `--mind-select energy`, using its own RNG. Their actions last until the next query. Other organisms and newborns act neutral.
+- Observation schema: `{id, traits:{hardiness,metabolism_eff,mobility,reproduction_rate} (0..1), energy (0..1 of E_MAX), stress, food, density, lat, lon, species, gen, culture?:{level,pollution,mitigation}}`.
+- Action schema: `{move:[dx,dy,dz]|null, forage, mate, rest}`.
+- Experience schema (`learn` and `--mind-trace` JSONL): `{id,t0,t1,energy0,energy1,alive,obs,action}`.
+
+Backends:
+- `--mind heuristic --mind-learn`: a built-in linear policy over trait, energy, stress, food, density, latitude and culture features. Learning is REINFORCE-lite. The reward is Δenergy/E_MAX minus 1 if the organism died. The update is `W += lr·(r − baseline)·eps·fᵀ/σ`. It is deterministic per seed, and the learned `W` appears in the report under `planets[i].mind`.
+- `--mind http --mind-url http://127.0.0.1:11434/v1 --mind-model llama3.2`: any OpenAI-compatible `/chat/completions` endpoint, such as Ollama, LM Studio or llama.cpp.
+  - You can also set `NIM_MIND_URL`, `NIM_MIND_MODEL` and `NIM_MIND_KEY`, plus `--mind-timeout`.
+  - "Learning" here means in context: a short memory of recent outcomes is sent with each query.
+  - On a timeout, an error or bad JSON, that batch gets neutral actions and the sim keeps going.
+  - Calls are synchronous, so a slow model slows the sim. Use a larger `--mind-every` or a smaller `--mind-batch`.
+- `--mind script --mind-script my_policy.py`: your file must define `decide(obs)->list[dict]`. It may also define `learn(experiences)` and `culture_advise(state)->{mitigation_boost:0..1}`; the advice adds at most 0.002/yr to culture mitigation. A file without `decide` fails at load. See `universe/mind_example_policy.py`.
+
+The same flags work for `run_life` and `run_life_live`. In live mode each planet gets its own mind. Checkpoints copy the heuristic learner's state; an HTTP model is outside the checkpoints, so a restore with it is not deterministic.
+```
+python -m universe.run_life --seed 4 --plant --mind heuristic --mind-learn --mind-trace out/mind.jsonl
+python -m universe.run_life_live --seed 4 --plant --mind http --mind-url http://127.0.0.1:11434/v1 --mind-model llama3.2 --mind-every 100 --mind-batch 8
+```

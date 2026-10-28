@@ -1,9 +1,11 @@
 """CLI: make a small planetary system (sim2.make_system + config defaults) and run the life leaves on it.
 python -m universe.run_life --seed 7 [--years 2000 --dt 10 --plant --rng numpy|nim --no-culture --distance-pc 10
-                                      --params results/learned_life.json]"""
+                                      --params results/learned_life.json]
+       [--mind none|heuristic|http|script --mind-learn --mind-every 20 --mind-batch 16 --mind-url --mind-model --mind-script --mind-trace]"""
 import argparse, json, os, numpy as np
 from .sim2 import make_system, DEFAULTS
 from .leaves import life_loop
+from .leaves import mind as mind_mod
 
 def load_lp(path):
     if not path: return None
@@ -22,12 +24,12 @@ def summarize(rep, out):
     print(f"  host flares={hf['n_flares']} uv_max={hf['uv_max']:.2f} dM={hf['dM_star']:.2e}; observer delay={rad['delay_yr']} detections={rad['n_detections']} first={list(rad['first'])[:6]}")
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(); common_args(ap)
+    ap = argparse.ArgumentParser(); common_args(ap); mind_mod.add_args(ap)
     a = ap.parse_args(argv); C = json.load(open(a.config)); C = {**C, "asteroids": C.get("eval", {}).get("asteroids", 40)}
     if a.rng == "nim": from .nim_rng import NIMRandom
     r = NIMRandom(a.seed) if a.rng == "nim" else np.random.default_rng(a.seed)
     S = make_system(r, C, DEFAULTS)
-    rep = life_loop(S, a.seed, load_lp(a.params), a.years, a.dt, a.plant, culture=a.culture, distance_pc=a.distance_pc)
+    rep = life_loop(S, a.seed, load_lp(a.params), a.years, a.dt, a.plant, culture=a.culture, distance_pc=a.distance_pc, mind=mind_mod.from_args(a, a.seed))
     out = a.out or os.path.join(C.get("out_dir", "/workspace/nim_universe/out"), f"life_demo_seed{a.seed}.json")
     os.makedirs(os.path.dirname(out), exist_ok=True); json.dump(rep, open(out, "w"), indent=1); summarize(rep, out); return rep
 
