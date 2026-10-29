@@ -77,9 +77,46 @@ def test_make_mind_and_cli():
     ap = argparse.ArgumentParser(); M.add_args(ap)
     a = ap.parse_args(["--mind", "http", "--mind-url", "http://127.0.0.1:11434/v1", "--mind-model", "qwen", "--mind-every", "5", "--mind-batch", "4"])
     m = M.from_args(a, 1); assert m.url.endswith("11434/v1") and m.model == "qwen" and m.every == 5 and m.batch == 4
+    a = ap.parse_args(["--mind", "circuit", "--mind-talk", "--mind-model", "qwen", "--mind-layers", "3"])
+    m = M.from_args(a, 1); assert isinstance(m, M.CircuitMind) and m.layers == 3 and m.talk.model == "qwen"
+    assert M.from_args(ap.parse_args(["--mind", "circuit"]), 1).talk is None
 
 def test_deepcopy_checkpoint():
     import copy
     m = M.make_mind("heuristic", learn=True, seed=2); r = _run(m, 800); c = copy.deepcopy(r)
     for _ in range(20): r.step(); c.step()
     assert np.array_equal(r.mind.W, c.mind.W) and _js(r.report()) == _js(c.report())
+
+def _obs(n=6, seed=0):
+    pop = I.found(None, np.random.default_rng(seed), max(n, 8))
+    r = HabitatRun(hab(1.), SUN, None, np.random.default_rng(1), 100, 10., plant=True, culture=False); r.step()
+    return M.observe(pop, np.arange(n), np.zeros(len(pop)), np.ones(len(pop)), .3, None)
+
+def test_circuit_decide_valid_deterministic():
+    obs = _obs(); a, b = M.make_mind("circuit", seed=5), M.make_mind("inceptron", seed=5)
+    oa, ob = a.decide(obs), b.decide(obs)
+    assert isinstance(a, M.CircuitMind) and a.n_wires == len(M.HEADS) and len(oa) == len(obs) and a.n_fail == 0
+    assert _js(oa) == _js(ob)
+    for x in oa:
+        c = M.clamp_action(x); assert .5 <= c["forage"] <= 1.5 and .5 <= c["mate"] <= 2 and 0 <= c["rest"] <= 1 and c["move"] is not None
+    z = a.z(M.featurize(obs[0])); assert z.shape == (5,) and np.all(np.abs(z) <= 1 + 1e-9)
+    bad = M.make_mind("circuit", seed=5); bad.E = "junk"; assert bad.decide(obs) == [M.NEUTRAL]*len(obs) and bad.n_fail == 1
+
+def test_circuit_learns_in_sim_deterministic():
+    m1, m2 = (M.make_mind("circuit", every=50, batch=8, learn=True, seed=3) for _ in range(2))
+    E0 = m1.E.copy(); r1, r2 = _run(m1), _run(m2)
+    assert m1.n_learn > 3 and m1.n_fail == 0 and not np.allclose(m1.E, E0) and np.array_equal(m1.E, m2.E)
+    assert _js(r1.report()) == _js(r2.report()) and r1.report()["mind"]["kind"] == "circuit"
+
+def test_talk_does_not_change_actions(tmp_path):
+    seen = []
+    def ok(url, body, h, t): seen.append(body); return {"choices": [{"message": {"content": "They forage because food is scarce."}}]}
+    def boom(*a): raise TimeoutError
+    mk = lambda: M.make_mind("circuit", every=50, batch=8, learn=True, seed=4)
+    base = mk(); r0 = _run(base)
+    talk = mk(); talk.talk = M.Talk(post=ok, model="m", path=str(tmp_path/"talk.jsonl")); r1 = _run(talk)
+    dead = mk(); dead.talk = M.Talk(post=boom); r2 = _run(dead)
+    strip = lambda r: {k: v for k, v in r.report().items() if k != "mind"}
+    assert _js(strip(r0)) == _js(strip(r1)) == _js(strip(r2)) and np.array_equal(base.E, talk.E)
+    assert seen and "actions" in seen[0]["messages"][1]["content"] and talk.talk.n_calls == talk.n_queries and dead.talk.n_fail > 0
+    rows = [json.loads(l) for l in open(tmp_path/"talk.jsonl")]; assert rows[0]["kind"] == "talk" and rows[0]["text"].startswith("They")

@@ -11,7 +11,9 @@ clamps: move -> tangent of the sphere, |move| <= 1 (x MOVE_K x the organism's ow
         (cuts basal burn by <= REST_K and intake by <= 2 REST_K).
 experience (learn): {id, t0, t1, energy0, energy1, alive, obs, action}
 Kinds (make_mind): none|null -> NullMind; heuristic -> HeuristicMind (built-in online linear policy, REINFORCE-lite);
-http -> HttpMind (OpenAI-compatible /chat/completions, e.g. Ollama); script -> ScriptMind (user .py with decide / optional learn)."""
+circuit|inceptron -> CircuitMind (PennyLane variational circuit, 5 wires = HEADS, hot-path steering);
+http -> HttpMind (DEPRECATED for steering, back-compat only); script -> ScriptMind (user .py with decide / optional learn).
+Talk (Ollama / OpenAI-compatible): optional `mind.talk = Talk(...)` narrates already-chosen actions after decide; logged only."""
 import json, os, importlib.util, urllib.request, numpy as np
 from .params import TRAITS, LIFE_SPACE
 
@@ -50,16 +52,16 @@ class Mind(NullMind):
     def __init__(self, every=20., batch=16, learn=False, trace_path=None, seed=0, select="random"):
         self.every, self.batch, self.learn_enabled, self.trace_path, self.select = float(every), int(batch), bool(learn), trace_path, select
         self.rng = np.random.default_rng([int(seed) % 2**31, 97]); self.last_t = -1e18; self.ids = np.zeros(0, int); self.act = None
-        self.pending = None; self.culture = None; self.n_queries = 0; self.n_learn = 0; self.n_fail = 0
+        self.pending = None; self.culture = None; self.talk = None; self.n_queries = 0; self.n_learn = 0; self.n_fail = 0
     def _trace(self, rows):
         if not self.trace_path: return
         with open(self.trace_path, "a") as f:
             for r in rows: f.write(json.dumps(r, default=float) + "\n")
     def __deepcopy__(self, memo):      # live checkpoints: learner state is copied; module / transport handles are shared
         import copy; c = object.__new__(type(self)); memo[id(self)] = c
-        for k, v in self.__dict__.items(): setattr(c, k, v if k in ("mod", "post", "culture_advise") else copy.deepcopy(v, memo))
+        for k, v in self.__dict__.items(): setattr(c, k, v if k in ("mod", "post", "culture_advise", "_q", "talk") else copy.deepcopy(v, memo))
         return c
-    def summary(self): return dict(kind=self.kind, every=self.every, batch=self.batch, learn=self.learn_enabled, queries=self.n_queries, learn_calls=self.n_learn, failures=self.n_fail)
+    def summary(self): return dict(kind=self.kind, every=self.every, batch=self.batch, learn=self.learn_enabled, queries=self.n_queries, learn_calls=self.n_learn, failures=self.n_fail, **({"talk": self.talk.summary()} if self.talk is not None else {}))
 
 def observe(pop, idx, stress, dens, food_pc, culture=None):
     from .individuals import E_MAX, latlon
@@ -96,6 +98,9 @@ def tick(mind, pop, stress, dens, food_pc):
         mind.act = (np.array([a["move"] or [0., 0., 0.] for a in acts]).reshape(-1, 3), np.array([a["forage"] for a in acts]),
                     np.array([a["mate"] for a in acts]), np.array([a["rest"] for a in acts]))
         mind.pending = (mind.ids, pop.energy[idx].copy(), float(pop.t), obs, acts)
+        if getattr(mind, "talk", None) is not None:          # narration only: after actions are fixed, never read back
+            try: mind.talk.explain(obs, acts, float(pop.t))
+            except Exception: pass
     mv, fo, ma, re = np.zeros((n, 3)), np.ones(n), np.ones(n), np.zeros(n)
     if mind.act is not None and len(mind.ids) and n:
         o = np.argsort(mind.ids); s = mind.ids[o]; j = np.clip(np.searchsorted(s, pop.id), 0, len(s) - 1); hit = s[j] == pop.id; q = o[j[hit]]
@@ -142,12 +147,97 @@ class HeuristicMind(Mind):
         self.base += .2*(float(r.mean()) - self.base); self.eps.clear()
     def summary(self): return dict(super().summary(), W=np.round(self.W, 4).tolist(), feats=FEATS, heads=HEADS, baseline=round(self.base, 5))
 
+
+# ---------------------------------------------------------------- Inceptron circuit mind (hot path)
+class CircuitMind(Mind):
+    """Inceptron-style variational quantum circuit (PennyLane default.qubit), one wire per HEAD (5 wires), `layers` data re-upload
+    layers (NIM CircuitClass / autopilot QuantumPolicy idea, no threaded Inceptron/Config): layer l applies RY(E_l f + B_l) on every
+    wire, RZ(R_l), then a CNOT ring; PauliZ expvals z -> a = z + sigma eps -> same action dict as HeuristicMind via _frame.
+    learn(): REINFORCE-lite with HeuristicMind's reward r = dE/E_MAX - death_pen*died, ascent on sum (r-b) eps.z(f)/sigma
+    (backprop through the circuit). Deterministic per seed (init + exploration from self.rng). Any circuit error -> neutral, n_fail++."""
+    kind = "circuit"
+    def __init__(self, layers=2, lr=.05, sigma=.3, death_pen=1., **kw):
+        super().__init__(**kw); self.layers, self.lr, self.sigma, self.death_pen = int(layers), lr, sigma, death_pen
+        nq, nf = len(HEADS), len(FEATS); self.n_wires = nq
+        self.E = self.rng.normal(0, .1, (self.layers, nq, nf)); self.B = np.zeros((self.layers, nq)); self.B[0] = np.pi/2   # z ~ 0 at start
+        self.R = np.zeros((self.layers, nq)); self.base = 0.; self.eps = {}; self._q = None
+    def _qnode(self):
+        if self._q is None:
+            import pennylane as qml
+            nq, L = self.n_wires, self.layers; dev = qml.device("default.qubit", wires=nq)
+            @qml.qnode(dev, interface="autograd", diff_method="backprop")
+            def circ(f, E, B, R):
+                for l in range(L):
+                    ang = qml.math.tensordot(E[l], f, axes=[[1], [0]]) + B[l]
+                    for q in range(nq): qml.RY(ang[q], wires=q); qml.RZ(R[l][q], wires=q)
+                    if nq > 1:
+                        for q in range(nq): qml.CNOT(wires=[q, (q + 1) % nq])
+                return [qml.expval(qml.PauliZ(q)) for q in range(nq)]
+            self._q = circ
+        return self._q
+    def z(self, f): return np.array(self._qnode()(np.asarray(f, float), self.E, self.B, self.R), dtype=float)
+    def decide(self, obs):
+        out = []
+        try:
+            for o in obs:
+                f = featurize(o); eps = self.rng.normal(size=len(HEADS)); a = self.z(f) + self.sigma*eps; self.eps[o["id"]] = (f, eps)
+                nv, ev = _frame(o["lat"], o["lon"])
+                out.append(dict(move=(a[0]*nv + a[1]*ev).tolist(), forage=1 + .5*a[2], mate=1 + .75*a[3], rest=.5 + .5*a[4]))
+            return out
+        except Exception: self.n_fail += 1; return [dict(NEUTRAL) for _ in obs]
+    def learn(self, exps):
+        if not exps: return
+        r = np.array([(e["energy1"] - e["energy0"])/12. - self.death_pen*(not e["alive"]) for e in exps])
+        items = [(ri - self.base, self.eps.pop(e["id"])) for e, ri in zip(exps, r) if e["id"] in self.eps]
+        if items:
+            import pennylane as qml; from pennylane import numpy as pnp; circ = self._qnode()
+            def obj(E, B, R):
+                s = 0.
+                for adv, (f, eps) in items: s = s + adv*qml.math.sum(qml.math.stack(circ(pnp.array(f, requires_grad=False), E, B, R))*eps)/self.sigma
+                return s/len(items)
+            gE, gB, gR = qml.grad(obj, argnums=[0, 1, 2])(pnp.array(self.E, requires_grad=True), pnp.array(self.B, requires_grad=True), pnp.array(self.R, requires_grad=True))
+            self.E = np.clip(self.E + self.lr*np.asarray(gE), -3, 3); self.B = self.B + self.lr*np.asarray(gB); self.R = self.R + self.lr*np.asarray(gR)
+        self.base += .2*(float(r.mean()) - self.base); self.eps.clear()
+    def summary(self): return dict(super().summary(), wires=self.n_wires, layers=self.layers, heads=HEADS, feats=FEATS, baseline=round(self.base, 5),
+                                   E=np.round(self.E, 4).tolist(), B=np.round(self.B, 4).tolist(), R=np.round(self.R, 4).tolist())
+
+# ---------------------------------------------------------------- talk (Ollama / OpenAI-compatible) - narration only, never steers
+TALK_SYS = ("You narrate a simulated ecosystem. The actions below were ALREADY chosen by a quantum-circuit policy; do not change them. "
+            "Reply with 1-3 short sentences explaining plausibly why these organisms act this way given their observations.")
+
+class Talk:
+    """Post-decide natural-language rationale via an OpenAI-compatible /chat/completions (Ollama default). Output is only logged
+    (JSONL rows {t,kind:"talk",ids,text}); it is never fed back into actions or rng. Errors -> None, n_fail++."""
+    def __init__(self, url=None, model=None, timeout=10., api_key=None, post=None, path=None):
+        self.url = (url or os.environ.get("NIM_MIND_URL") or "http://127.0.0.1:11434/v1").rstrip("/")
+        self.model = model or os.environ.get("NIM_MIND_MODEL") or "llama3.2"; self.timeout = float(timeout)
+        self.api_key = api_key or os.environ.get("NIM_MIND_KEY"); self.post = post or _http_post; self.path = path
+        self.n_calls = self.n_fail = 0; self.last = None
+    def explain(self, obs, actions, t=None):
+        if not obs: return None
+        body = dict(model=self.model, temperature=0, messages=[dict(role="system", content=TALK_SYS), dict(role="user", content=json.dumps(
+            dict(observations=obs, actions=actions), separators=(",", ":"), default=float))])
+        h = {"Content-Type": "application/json", **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {})}
+        self.n_calls += 1
+        try: txt = str(self.post(self.url + "/chat/completions", body, h, self.timeout)["choices"][0]["message"]["content"]).strip()
+        except Exception: self.n_fail += 1; return None
+        self.last = txt
+        if self.path:
+            with open(self.path, "a") as fh: fh.write(json.dumps(dict(t=t, kind="talk", ids=[o.get("id") for o in obs], text=txt)) + "\n")
+        return txt
+    def __deepcopy__(self, memo): return self
+    def summary(self): return dict(url=self.url, model=self.model, calls=self.n_calls, failures=self.n_fail)
+
+def _http_post(url, body, headers, timeout):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r: return json.load(r)
+
 # ---------------------------------------------------------------- adapters
 SYS = ("You steer simulated organisms. Reply ONLY with JSON {\"actions\":[...]} - one object per observation, same order, each "
        "{\"id\":int,\"move\":[dx,dy,dz] or null,\"forage\":0.5..1.5,\"mate\":0.5..2,\"rest\":0..1}. Goal: survive and keep energy high.")
 
 class HttpMind(Mind):
-    """OpenAI-compatible chat endpoint (Ollama: http://127.0.0.1:11434/v1). Any error/timeout/bad JSON -> neutral actions for that batch.
+    """DEPRECATED for steering (LLMs hallucinate ids; slow): use --mind circuit [--mind-talk]. Kept for back-compat. OpenAI-compatible chat endpoint (Ollama: http://127.0.0.1:11434/v1). Any error/timeout/bad JSON -> neutral actions for that batch.
     `post(url, body, headers, timeout) -> dict` is injectable for tests."""
     kind = "http"
     def __init__(self, url=None, model=None, timeout=10., api_key=None, post=None, **kw):
@@ -201,18 +291,22 @@ def culture_nudge(mind, c, dt):
     except Exception: return c
     c.mitigation = float(min(1., c.mitigation + np.clip(_num(adv.get("mitigation_boost"), 0.), 0., 1.)*.002*dt)); return c
 
-KINDS = ("none", "null", "heuristic", "http", "script")
+KINDS = ("none", "null", "heuristic", "circuit", "inceptron", "http", "script")
 def make_mind(kind="none", **kw):
     kind = (kind or "none").lower()
     if kind in ("none", "null"): return None
     if kind == "heuristic": return HeuristicMind(**kw)
+    if kind in ("circuit", "inceptron"): return CircuitMind(**kw)
     if kind == "http": return HttpMind(**kw)
     if kind == "script": return ScriptMind(**kw)
     raise ValueError(f"unknown mind kind {kind!r}; use one of {KINDS}")
 
 def add_args(ap):
     g = ap.add_argument_group("local mind / AI plug-in (default off)")
-    g.add_argument("--mind", default="none", choices=["none", "heuristic", "http", "script"]); g.add_argument("--mind-url", default=None, help="OpenAI-compatible base, e.g. http://127.0.0.1:11434/v1")
+    g.add_argument("--mind", default="none", choices=["none", "heuristic", "circuit", "inceptron", "http", "script"],
+                   help="circuit (alias inceptron): quantum-circuit steering; http is deprecated for steering - use circuit + --mind-talk"); g.add_argument("--mind-url", default=None, help="talk (and legacy http) OpenAI-compatible base, e.g. http://127.0.0.1:11434/v1")
+    g.add_argument("--mind-talk", action="store_true", help="after each decide, ask Ollama (--mind-url/--mind-model) for a rationale; logged only, never steers")
+    g.add_argument("--mind-talk-log", default=None, help="talk JSONL (default: --mind-trace)"); g.add_argument("--mind-layers", type=int, default=2)
     g.add_argument("--mind-model", default=None); g.add_argument("--mind-script", default=None); g.add_argument("--mind-timeout", type=float, default=10.)
     g.add_argument("--mind-every", type=float, default=20., help="world-yr between queries"); g.add_argument("--mind-batch", type=int, default=16)
     g.add_argument("--mind-select", default="random", choices=["random", "energy"]); g.add_argument("--mind-learn", action="store_true")
@@ -222,4 +316,8 @@ def from_args(a, seed=0):
     kw = dict(every=a.mind_every, batch=a.mind_batch, learn=a.mind_learn, trace_path=a.mind_trace, seed=seed, select=a.mind_select)
     if a.mind == "http": kw.update(url=a.mind_url, model=a.mind_model, timeout=a.mind_timeout)
     if a.mind == "script": kw.update(path=a.mind_script)
-    return make_mind(a.mind, **kw)
+    if a.mind in ("circuit", "inceptron"): kw.update(layers=getattr(a, "mind_layers", 2))
+    m = make_mind(a.mind, **kw)
+    if m is not None and getattr(a, "mind_talk", False):
+        m.talk = Talk(url=a.mind_url, model=a.mind_model, timeout=a.mind_timeout, path=getattr(a, "mind_talk_log", None) or a.mind_trace)
+    return m

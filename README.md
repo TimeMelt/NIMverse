@@ -378,15 +378,14 @@ Leftovers: QrnLOpt optimizer skipped (SPSA only); training on full seeds 0–19 
 
 Backends:
 - `--mind heuristic --mind-learn`: a built-in linear policy over trait, energy, stress, food, density, latitude and culture features. Learning is REINFORCE-lite. The reward is Δenergy/E_MAX minus 1 if the organism died. The update is `W += lr·(r − baseline)·eps·fᵀ/σ`. It is deterministic per seed, and the learned `W` appears in the report under `planets[i].mind`.
-- `--mind http --mind-url http://127.0.0.1:11434/v1 --mind-model llama3.2`: any OpenAI-compatible `/chat/completions` endpoint, such as Ollama, LM Studio or llama.cpp.
-  - You can also set `NIM_MIND_URL`, `NIM_MIND_MODEL` and `NIM_MIND_KEY`, plus `--mind-timeout`.
-  - "Learning" here means in context: a short memory of recent outcomes is sent with each query.
-  - On a timeout, an error or bad JSON, that batch gets neutral actions and the sim keeps going.
-  - Calls are synchronous, so a slow model slows the sim. Use a larger `--mind-every` or a smaller `--mind-batch`.
+- `--mind circuit` (alias `inceptron`) **[recommended steering]**: an Inceptron-style variational quantum circuit (PennyLane `default.qubit`), mirroring NIM `CircuitClass` / `autopilot.QuantumPolicy` without the threaded Inceptron/Config stack. 5 wires (one per head: north, east, forage, mate, rest), `--mind-layers` (default 2) data re-upload layers: `RY(E_l·f + B_l)` + `RZ(R_l)` per wire, then a CNOT ring; PauliZ expvals + σ·ε exploration map to the same actions as `heuristic`. `--mind-learn`: REINFORCE-lite with the same reward, gradients by backprop through the circuit. Deterministic per seed; any circuit error → neutral actions and `failures++`.
+- `--mind-talk` (with any steering mind): after each decide, the already-chosen actions + observations go to an OpenAI-compatible `/chat/completions` (Ollama default, `--mind-url/--mind-model/--mind-timeout`, `NIM_MIND_URL/MODEL/KEY`) for a short natural-language rationale. Text is logged as `{t,kind:"talk",ids,text}` rows to `--mind-talk-log` (default `--mind-trace`) and is **never** fed back into actions or RNG. Calls are synchronous, so a slow model still slows wall-clock time.
+- `--mind http` (**deprecated for steering**, back-compat only; LLMs hallucinate ids): asks the LLM for the actions themselves. Use `--mind circuit --mind-talk` instead.
 - `--mind script --mind-script my_policy.py`: your file must define `decide(obs)->list[dict]`. It may also define `learn(experiences)` and `culture_advise(state)->{mitigation_boost:0..1}`; the advice adds at most 0.002/yr to culture mitigation. A file without `decide` fails at load. See `universe/mind_example_policy.py`.
 
 The same flags work for `run_life` and `run_life_live`. In live mode each planet gets its own mind. Checkpoints copy the heuristic learner's state; an HTTP model is outside the checkpoints, so a restore with it is not deterministic.
 ```
 python -m universe.run_life --seed 4 --plant --mind heuristic --mind-learn --mind-trace out/mind.jsonl
-python -m universe.run_life_live --seed 4 --plant --mind http --mind-url http://127.0.0.1:11434/v1 --mind-model llama3.2 --mind-every 100 --mind-batch 8
+python -m universe.run_life --seed 4 --plant --mind circuit --mind-learn --mind-trace out/mind.jsonl
+python -m universe.run_life_live --seed 4 --plant --mind circuit --mind-talk --mind-url http://127.0.0.1:11434/v1 --mind-model llama3.2 --mind-every 100 --mind-batch 8
 ```
