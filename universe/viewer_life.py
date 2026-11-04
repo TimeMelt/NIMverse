@@ -28,7 +28,7 @@ def main(argv=None):
                 evolution=dict(series=[dict(t=e["t_w"], n=e["n_alive"], m=e["trait_means"]) for e in evo.get("evolution_series", [])][::4], births=evo.get("total_births"), species_ever=evo.get("species_ever"), species_alive=evo.get("n_species_alive"), sexual_births=evo.get("total_sexual_births")) if inds else None, T_eff=J["host"].get("T_eff", 5800))
     R = lambda p: open(os.path.join(HERE, p)).read(); html = R("viewer_src/life_template.html")
     for key, val in [("/*THREE*/", R("vendor/three.min.js")), ("/*ORBIT*/", R("vendor/OrbitControls.js")), ("/*DATA*/", json.dumps(data, separators=(",", ":"))),
-                     ("/*SHADERS*/", R("viewer_src/shaders.js")), ("/*APP*/", R("viewer_src/life.js"))]:
+                     ("/*SHADERS*/", R("viewer_src/shaders.js")), ("/*APP*/", R("viewer_src/creature_mesh.js")+"\n"+R("viewer_src/life.js"))]:
         html = html.replace(key, val.replace("</script", "<\\/script"), 1)
     out = a.out or f"{OUT}/viewer_life_seed{a.seed}.html"; open(out, "w").write(html)
     plans = {}; [plans.__setitem__(c["plan"], plans.get(c["plan"], 0)+1) for c in cr]

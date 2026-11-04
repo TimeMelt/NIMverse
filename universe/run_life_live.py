@@ -244,7 +244,7 @@ def make_handler(sim, token=None):
 
 def viewer_html():
     R = lambda p: open(os.path.join(HERE, p)).read(); html = R("viewer_src/life_live_template.html")
-    for key, val in [("/*THREE*/", R("vendor/three.min.js")), ("/*ORBIT*/", R("vendor/OrbitControls.js")), ("/*SHADERS*/", R("viewer_src/shaders.js")), ("/*APP*/", R("viewer_src/life_live.js"))]:
+    for key, val in [("/*THREE*/", R("vendor/three.min.js")), ("/*ORBIT*/", R("vendor/OrbitControls.js")), ("/*SHADERS*/", R("viewer_src/shaders.js")), ("/*APP*/", R("viewer_src/creature_mesh.js")+"\n"+R("viewer_src/life_live.js"))]:
         html = html.replace(key, val.replace("</script", "<\\/script"), 1)
     return html
 

@@ -13,6 +13,9 @@ async def main(a):
                  ("03_surface_herd2", "NIM.setTime(5);NIM.view('surface',a.seedB,{dist:.16,az:1})".replace("a.seedB", str(a.herd2))),
                  ("04_creature", f"NIM.setTime(4);NIM.view('creature',{a.c1},{{dist:.028}})"), ("05_creature2", f"NIM.setTime(4);NIM.view('creature',{a.c2},{{dist:.03,az:.8}})"),
                  ("06_tech_lights", "NIM.setTime(2);NIM.view('surface',0,{dist:.14,az:2.2})")]
+        plans = await pg.evaluate("(()=>{const o={}; NIM.creatures.forEach((c,i)=>{if(!(c.plan in o))o[c.plan]=i;}); return o;})()")
+        shots += [(f"07_{pl}_closeup", f"NIM.setTime(4.3);NIM.view('creature',{i},{{dist:.022,az:.6}})") for pl, i in sorted(plans.items())]   # one hero closeup per body plan
+        print("triangles (all creatures):", await pg.evaluate("NIM.tris?NIM.tris():-1"), flush=True)
         for n, js in shots:
             await pg.evaluate(js); await pg.evaluate("NIM.render()"); await pg.screenshot(path=f"{pre}_{n}.png"); print("shot", n, flush=True)
         if a.tour:
@@ -22,7 +25,8 @@ async def main(a):
                 await pg.evaluate(f"NIM.setTime({3+i*.12});NIM.view('surface',0,{{dist:{d},az:{s*2.5}}})"); await pg.screenshot(path=f"{td}/f{i:04d}.png")
             subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "24", "-i", f"{td}/f%04d.png", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", f"{OUT}/life_creatures_seed{a.seed}.mp4"], check=True)
         print("errors:", len(errs), errs[:5]); await b.close()
-    for n, _ in shots: shutil.copy(f"{pre}_{n}.png", RES)       # all stills (01-06) -> results/
+    for n, _ in shots: shutil.copy(f"{pre}_{n}.png", RES)       # all stills (01-07) -> results/
+    if a.tour: shutil.copy(f"{OUT}/life_creatures_seed{a.seed}.mp4", RES)
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("--seed", type=int, default=4); ap.add_argument("--tour", type=int, default=0)
     ap.add_argument("--herd2", type=int, default=30); ap.add_argument("--c1", type=int, default=0); ap.add_argument("--c2", type=int, default=40)

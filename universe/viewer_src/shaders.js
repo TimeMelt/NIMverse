@@ -28,7 +28,7 @@ varying vec3 vObj; varying vec3 vN; varying vec3 vW;
 float lam(vec3 n){return max(dot(n,normalize(uSun-vW)),0.);} `;
 // Rocky planets: continents (fBm) + ridged mountains + biomes by height/latitude/moisture + caps + bump lighting
 const FS_ROCKY = NOISE + LIGHT + `
-uniform float uSea,uRough,uCS,uMtn,uMoist,uCap; uniform vec3 uC0,uC1,uC2,uC3,uC4,uC5; uniform float uLava; uniform mat3 uRot;
+uniform float uSea,uRough,uCS,uMtn,uMoist,uCap; uniform vec3 uC0,uC1,uC2,uC3,uC4,uC5; uniform float uLava; uniform mat3 uRot; uniform float uWet;   // uWet (life viewers only; 0=gallery look): ocean fresnel sheen + broad glint
 float height(vec3 p){vec3 q=p*uCS+uOff; float c=fbm(q,uRough)*.9+.5; float m=ridged(q*2.3+3.1,.5);
  return c + uMtn*.45*m*smoothstep(uSea-.05,uSea+.25,c);}
 void main(){vec3 p=normalize(vObj); float h=height(p);
@@ -46,6 +46,8 @@ void main(){vec3 p=normalize(vObj); float h=height(p);
  vec3 L=normalize(uSun-vW); float d=max(dot(n,L),0.); vec3 V=normalize(cameraPosition-vW);
  float s=pow(max(dot(reflect(-L,normalize(vN)),V),0.),40.)*spec;
  vec3 c=col*(.03+d*uSunCol)+s*uSunCol;
+ if(uWet>0.){float fr=pow(1.-max(dot(normalize(vN),V),0.),5.); float wet=water?1.:.0; float g2=pow(max(dot(reflect(-L,normalize(vN)),V),0.),8.);
+  c+=uWet*wet*(fr*vec3(.25,.35,.5)*(.3+.7*d)+g2*.18*uSunCol*d); if(!water) c*=1.+uWet*.12*smoothstep(.0,.6,d)*(1.-moist)*vec3(1.,.92,.78)-uWet*.06;}
  if(uLava>.5){float lv=smoothstep(uSea,uSea-.08,h); c+=vec3(1.,.35,.05)*lv*1.4*(.6+.4*snoise(p*20.+uOff));}
  gl_FragColor=vec4(c,1.);}`;
 const FS_CLOUD = NOISE + LIGHT + ` uniform float uCover, uTime;

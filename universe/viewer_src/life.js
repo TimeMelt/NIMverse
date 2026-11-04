@@ -19,33 +19,15 @@ d.colors.forEach((c,i)=>u['uC'+i]={value:new V3(...c)}); const core=new THREE.Me
 let cloud=null; if(d.clouds>.02){const cu=U(d); cu.uOff.value.add(new V3(31,7,13)); cu.uCover={value:d.clouds*.45}; cloud=new THREE.Mesh(sphere,mat(FS_CLOUD,cu,{transparent:true,depthWrite:false})); cloud.scale.setScalar(1.035); planet.add(cloud);}
 {const a={uAtm:{value:new V3(...d.atm)},uSun:{value:sun}}; const am=new THREE.Mesh(sphere,mat(FS_ATM,a,{transparent:true,blending:THREE.AdditiveBlending,depthWrite:false})); am.scale.setScalar(1.06); planet.add(am);}
 scene.add(planet);
-const sunL=new THREE.DirectionalLight(0xfff6ea,1.5); sunL.position.copy(sun); scene.add(sunL); scene.add(new THREE.AmbientLight(0x223344,.55)); scene.add(new THREE.HemisphereLight(0x6688aa,0x081018,.35));
+const sunL=NIMC.lights(scene,renderer,sun); u.uWet={value:1};   // lighting pass (creature_mesh.js): ACES, PMREM sky env, key+rim+hemi; ocean wet sheen
 // sun glow sprite
 function glowTex(c0,c1){const c=document.createElement('canvas'); c.width=c.height=128; const g=c.getContext('2d'); const gr=g.createRadialGradient(64,64,0,64,64,64); gr.addColorStop(0,c0); gr.addColorStop(.25,c1); gr.addColorStop(1,'rgba(0,0,0,0)'); g.fillStyle=gr; g.fillRect(0,0,128,128); return new THREE.CanvasTexture(c);}
 const GT=glowTex('rgba(255,255,255,1)','rgba(255,255,255,.3)');
 function spr(col,s,op=1){const m=new THREE.Sprite(new THREE.SpriteMaterial({map:GT,color:col,blending:THREE.AdditiveBlending,depthWrite:false,transparent:true,opacity:op})); m.scale.set(s,s,1); return m;}
 {const s=spr(new THREE.Color(1,.95,.85),60); s.position.copy(sun).multiplyScalar(8); scene.add(s);}
 // ---- creatures ----
-const SC=.0045, C=D.creatures, crs=[], pickables=[];
-const sm=(c,ex={})=>new THREE.MeshStandardMaterial(Object.assign({color:new THREE.Color(...c),flatShading:true,roughness:.6,metalness:.05},ex));
-function creature(k){const c=C[k], g=new THREE.Group(), body=new THREE.Group(); g.add(body);
- const glow=c.glow>.05, mb=sm(c.color, glow?{emissive:new THREE.Color(...c.accent),emissiveIntensity:.35*c.glow}:{}), ma=sm(c.accent,{emissive:new THREE.Color(...c.accent),emissiveIntensity:glow?.9*c.glow:.15});
- const limbs=[], S=c.size;
- const ball=(r,x,y,z,sx=1,sy=1,sz=1,m=mb,det=1)=>{const o=new THREE.Mesh(new THREE.IcosahedronGeometry(r,det),m); o.position.set(x,y,z); o.scale.set(sx,sy,sz); body.add(o); return o;};
- if(c.plan==='swimmer'){ball(1,0,0,0,.7,.55,1.7); const tail=new THREE.Mesh(new THREE.ConeGeometry(.6,1.2,4),ma); tail.rotation.x=-Math.PI/2; tail.position.z=-2.1; tail.scale.set(1,1,.3); body.add(tail); limbs.push({o:tail,k:'tail'});
-  for(let i=0;i<c.limbs;i++){const s=i%2?1:-1, f=new THREE.Mesh(new THREE.ConeGeometry(.35,1.1,3),ma); f.position.set(s*.75,-.1,.6-.5*Math.floor(i/2)); f.rotation.z=s*Math.PI/2; body.add(f); limbs.push({o:f,k:'fin',s});}
-  ball(.18,.35,.25,1.35,1,1,1,ma,0); ball(.18,-.35,.25,1.35,1,1,1,ma,0);}
- else if(c.plan==='crawler'){for(let i=0;i<c.segments;i++) ball(.7-.06*i,0,.1,1.1-1.0*i,1,.75,1.1);
-  for(let i=0;i<c.limbs;i++){const s=i%2?1:-1, l=new THREE.Mesh(new THREE.CylinderGeometry(.09,.06,1.4,4),mb); l.position.set(s*.85,-.35,1.1-(c.segments-1)*Math.floor(i/2)/Math.max(1,c.limbs/2-1)); l.rotation.z=s*1.0; body.add(l); limbs.push({o:l,k:'leg',s,i});}
-  ball(.15,.3,.45,1.65,1,1,1,ma,0); ball(.15,-.3,.45,1.65,1,1,1,ma,0); const ant=new THREE.Mesh(new THREE.ConeGeometry(.05,1.0,3),ma); ant.position.set(0,.8,1.9); ant.rotation.x=.7; body.add(ant);}
- else if(c.plan==='flyer'){ball(.6,0,0,0,.8,.7,1.6); const wg=new THREE.BoxGeometry(2.6,.06,1.1);
-  for(const s of [-1,1]){const w=new THREE.Group(), m=new THREE.Mesh(wg,ma); m.position.x=s*1.35; w.add(m); w.position.set(s*.4,.2,.1); body.add(w); limbs.push({o:w,k:'wing',s});}
-  const t=new THREE.Mesh(new THREE.ConeGeometry(.3,1.4,4),mb); t.rotation.x=-Math.PI/2; t.position.z=-1.5; body.add(t); ball(.12,.2,.25,.9,1,1,1,ma,0); ball(.12,-.2,.25,.9,1,1,1,ma,0);}
- else {const bell=new THREE.Mesh(new THREE.SphereGeometry(1,10,6,0,6.283,0,1.6),new THREE.MeshStandardMaterial({color:new THREE.Color(...c.color),emissive:new THREE.Color(...c.accent),emissiveIntensity:.25+.8*c.glow,transparent:true,opacity:.8,flatShading:true,side:THREE.DoubleSide})); bell.position.y=.6; body.add(bell); limbs.push({o:bell,k:'bell'});
-  for(let i=0;i<6+c.segments;i++){const a=i/(6+c.segments)*6.283, t=new THREE.Mesh(new THREE.CylinderGeometry(.05,.02,1.8,3),ma); t.position.set(.7*Math.cos(a),-.4,.7*Math.sin(a)); body.add(t); limbs.push({o:t,k:'tent',a});}}
- if(c.shell){const sh=new THREE.Mesh(new THREE.SphereGeometry(1,8,5,0,6.283,0,1.3),sm(c.accent.map(v=>v*.6),{roughness:.35,metalness:.3})); sh.scale.set(.85,.6,c.plan==='crawler'?.6*c.segments:1.4); sh.position.set(0,.25,c.plan==='crawler'?.6-.5*c.segments:0); body.add(sh);
-  for(let i=0;i<Math.round(3+4*c.shell_k);i++){const sp=new THREE.Mesh(new THREE.ConeGeometry(.08,.35,3),sm(c.accent)); const a=i*.9; sp.position.set(.5*Math.sin(a),.75,.6-i*.35); body.add(sp);}}
- if(glow){const s=spr(new THREE.Color(...c.accent),4.5*c.glow+1.5,.8); s.position.y=.3; body.add(s);}
+const SC=.0045, C=D.creatures, crs=[], pickables=[]; let tris=0;
+function creature(k){const c=C[k], g=new THREE.Group(), S=c.size; const B=NIMC.build(c), body=B.body, limbs=B.limbs; g.add(body); g.add(B.shadow); tris+=B.tris;
  body.traverse(o=>{if(o.isMesh){o.userData.k=k; pickables.push(o);}});
  g.scale.setScalar(SC*S); scene.add(g);
  const p0=new V3(Math.cos(c.lat)*Math.cos(c.lon),Math.sin(c.lat),Math.cos(c.lat)*Math.sin(c.lon)); let e=new V3(0,1,0).cross(p0).normalize(), n=p0.clone().cross(e);
@@ -58,16 +40,15 @@ function creature(k){const c=C[k], g=new THREE.Group(), body=new THREE.Group(); 
   pts.push(path[path.length-1].clone().multiplyScalar(alt*1.0015)); cols.push(col.r,col.g,col.b);
   const gg=new THREE.BufferGeometry().setFromPoints(pts); gg.setAttribute('color',new THREE.Float32BufferAttribute(cols,3));
   line=new THREE.Line(gg,new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:.85,depthWrite:false})); scene.add(line);}
- return {g,body,limbs,c,p0,t0,alt,w:c.speed*.012,path,line};}
+ return {g,body,limbs,c,p0,t0,alt,w:c.speed*.012,path,line,shadow:B.shadow};}
 function pathAt(P,u){u=Math.min(1,Math.max(0,u))*(P.length-1); const i=Math.min(P.length-2,Math.floor(u)), f=u-i; return P[i].clone().multiplyScalar(1-f).add(P[i+1].clone().multiplyScalar(f)).normalize();}
 const REPLAY=10;   // time units for one replay of the recorded path (oldest sample -> current position), then hold
 function replayU(t){return Math.min(1,Math.max(0,(t-1)/REPLAY));}
 for(let k=0;k<C.length;k++) crs.push(creature(k));
 // tech: lit structures + city lights near herds of the most mobile cohort
 const tech=[]; if(D.tech>0){let x=99; const rnd=()=>{x=(x*16807)%2147483647; return x/2147483647;}; const base=crs[0].p0;
- for(let i=0;i<Math.round(14*D.tech);i++){const p=base.clone().add(new V3(rnd()-.5,rnd()-.5,rnd()-.5).multiplyScalar(.6)).normalize(); const g=new THREE.Group();
-  const tw=new THREE.Mesh(new THREE.CylinderGeometry(.18,.35,2.4+3*rnd(),6),new THREE.MeshStandardMaterial({color:0x8899aa,metalness:.6,roughness:.3,flatShading:true})); tw.position.y=1.2; g.add(tw);
-  const l=spr(new THREE.Color(1,.8,.45),4,1); l.position.y=2.8; g.add(l); g.position.copy(p).multiplyScalar(1.004); g.quaternion.setFromUnitVectors(new V3(0,1,0),p); g.scale.setScalar(SC); scene.add(g); tech.push(g);}}
+ for(let i=0;i<Math.round(14*D.tech);i++){const p=base.clone().add(new V3(rnd()-.5,rnd()-.5,rnd()-.5).multiplyScalar(.6)).normalize();
+  const g=NIMC.tower(rnd); g.position.copy(p).multiplyScalar(1.0025); g.quaternion.setFromUnitVectors(new V3(0,1,0),p); g.scale.setScalar(SC); scene.add(g); tech.push(g);}}
 // ---- time / animation ----
 let T=0, mode='orbit', sel=-1; const up=new V3(), tmp=new V3();
 function place(cr,t){const c=cr.c; let p, fw, mean=.25*Math.sin(t*.3+c.wobble);
@@ -79,9 +60,8 @@ function place(cr,t){const c=cr.c; let p, fw, mean=.25*Math.sin(t*.3+c.wobble);
  fw.applyAxisAngle(p,mean).normalize(); let h=cr.alt; const ph=t*c.speed*6+c.phase;
  if(c.plan==='crawler'&&c.traits.mobility>.5) h+=.004*Math.max(0,Math.sin(ph*.5)); if(c.plan==='flyer') h+=.01*Math.sin(t*.7+c.phase); if(c.plan==='floater') h+=.004*Math.sin(t*1.3+c.phase);
  cr.g.position.copy(p).multiplyScalar(h); const m=new THREE.Matrix4(); const xx=p.clone().cross(fw).normalize(); m.makeBasis(xx.negate(),p,fw); cr.g.quaternion.setFromRotationMatrix(m);
- cr.limbs.forEach(L=>{if(L.k==='tail')L.o.rotation.y=.5*Math.sin(ph); else if(L.k==='fin')L.o.rotation.x=.6*Math.sin(ph+L.s); else if(L.k==='leg')L.o.rotation.x=.6*Math.sin(ph+(L.i%4)*1.57);
-  else if(L.k==='wing')L.o.rotation.z=L.s*.7*Math.sin(ph*1.5); else if(L.k==='bell')L.o.scale.set(1+.12*Math.sin(ph),1-.1*Math.sin(ph),1+.12*Math.sin(ph)); else if(L.k==='tent')L.o.rotation.x=.3*Math.sin(ph+L.a);});
- cr.body.rotation.z=c.plan==='swimmer'?.15*Math.sin(ph):0;}
+ NIMC.animate(cr,ph,t); NIMC.placeShadow(cr,h,SC*c.size);
+ cr.body.rotation.z=c.plan==='swimmer'?.08*Math.sin(ph*.5):c.plan==='flyer'?.12*Math.sin(t*.7+c.phase):0;}
 function setTime(t){T=t; crs.forEach(c=>place(c,t)); [core,cloud].forEach(m=>{if(m)m.material.uniforms.uTime.value=t;});}
 // ---- UI ----
 const info=document.getElementById('info'), selE=document.getElementById('sel'), modeE=document.getElementById('mode');
@@ -104,5 +84,5 @@ function render(){follow(); controls.update(); const dist=camera.position.length
 let playing=true, last=performance.now();
 function loop(now){requestAnimationFrame(loop); if(playing){setTime(T+Math.min(.05,(now-last)/1000));} last=now; render();}
 setTime(0); view('orbit'); requestAnimationFrame(loop);
-window.NIM={ready:true, view, setTime, render, still(){playing=false;}, play(){playing=true;}, creatures:C, pos:i=>crs[i].g.position.toArray(), cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t); render();}};
+window.NIM={ready:true, view, setTime, render, still(){playing=false;}, play(){playing=true;}, creatures:C, tris:()=>tris, pos:i=>crs[i].g.position.toArray(), cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t); render();}};
 })();
