@@ -11,7 +11,7 @@ clamps: move -> tangent of the sphere, |move| <= 1 (x MOVE_K x the organism's ow
         (cuts basal burn by <= REST_K and intake by <= 2 REST_K).
 experience (learn): {id, t0, t1, energy0, energy1, alive, obs, action}
 Kinds (make_mind): none|null -> NullMind; heuristic -> HeuristicMind (built-in online linear policy, REINFORCE-lite);
-circuit|inceptron -> CircuitMind (PennyLane variational circuit, 5 wires = HEADS, hot-path steering);
+circuit|inceptron -> CircuitMind (QWRK-structured PennyLane circuit: XY AngleEmbedding, RX/RY/RZ body, PauliX readout, 5 wires = HEADS);
 http -> HttpMind (DEPRECATED for steering, back-compat only); script -> ScriptMind (user .py with decide / optional learn).
 Talk (Ollama / OpenAI-compatible): optional `mind.talk = Talk(...)` narrates already-chosen actions after decide; logged only."""
 import json, os, importlib.util, urllib.request, numpy as np
@@ -150,32 +150,47 @@ class HeuristicMind(Mind):
 
 # ---------------------------------------------------------------- Inceptron circuit mind (hot path)
 class CircuitMind(Mind):
-    """Inceptron-style variational quantum circuit (PennyLane default.qubit), one wire per HEAD (5 wires), `layers` data re-upload
-    layers (NIM CircuitClass / autopilot QuantumPolicy idea, no threaded Inceptron/Config): layer l applies RY(E_l f + B_l) on every
-    wire, RZ(R_l), then a CNOT ring; PauliZ expvals z -> a = z + sigma eps -> same action dict as HeuristicMind via _frame.
-    learn(): REINFORCE-lite with HeuristicMind's reward r = dE/E_MAX - death_pen*died, ascent on sum (r-b) eps.z(f)/sigma
-    (backprop through the circuit). Deterministic per seed (init + exploration from self.rng). Any circuit error -> neutral, n_fail++."""
-    kind = "circuit"
-    def __init__(self, layers=2, lr=.05, sigma=.3, death_pen=1., **kw):
+    """QWRK-structured variational circuit (TimeMelt/QWRK QWRK.py motifs, as adapted in NIM-Drone-Autopilot drone/circuit.py arch="qwrk"),
+    PennyLane default.qubit, backprop. Layout:
+      wires   5 = one per HEAD (north, east, forage, mate, rest): the readout of wire q IS head q, so no classical decoder is needed.
+      feats   all 11 FEATS enter via a trainable linear projection x = tanh(E f) * pi/2  (E: [5, 11], last FEAT is bias), i.e. the
+              QWRK AngleEmbedding gets an n_wires-length vector built from every feature (option (a); tanh bounds angles to |x|<=pi/2,
+              the range where XY prep + PauliX stays odd/monotonic for signed heads).
+      prep    AngleEmbedding(x, rotation="X") then AngleEmbedding(x, rotation="Y")  (QWRK X,Y,Z prep minus the Z-on-|0> phase step).
+      body    QWRK order: for each wire, for each layer: RX(W[l,q,0]) -> RY(W[l,q,1]) -> RZ(W[l,q,2]) (per-wire weights).
+              entangle: "layer" (default, sparse: one CNOT ring after each layer's per-wire block), "off", or "dense"
+              (QWRK-literal ring after every gate; hurts per-head locality).
+      readout <PauliX_q> in [-1,1], sign-preserving (move north/east are signed). f=0 / x=0 -> |0> -> <X>=0, so the start is neutral-ish.
+    Policy a = <X>(f) + sigma eps -> same action dict as HeuristicMind. learn(): REINFORCE-lite, reward r = dE/E_MAX - death_pen*died,
+    ascent on mean (r-b) eps.<X>(f)/sigma, gradients for E and W by backprop. No QrnlOpt/KDE/RBM. Deterministic per seed (init +
+    exploration from self.rng). Any circuit error -> neutral actions, n_fail++."""
+    kind = "circuit"; ENTANGLE = ("layer", "off", "dense")
+    def __init__(self, layers=2, lr=.05, sigma=.3, death_pen=1., entangle="layer", **kw):
         super().__init__(**kw); self.layers, self.lr, self.sigma, self.death_pen = int(layers), lr, sigma, death_pen
-        nq, nf = len(HEADS), len(FEATS); self.n_wires = nq
-        self.E = self.rng.normal(0, .1, (self.layers, nq, nf)); self.B = np.zeros((self.layers, nq)); self.B[0] = np.pi/2   # z ~ 0 at start
-        self.R = np.zeros((self.layers, nq)); self.base = 0.; self.eps = {}; self._q = None
+        if entangle not in self.ENTANGLE: raise ValueError(f"entangle must be one of {self.ENTANGLE}")
+        nq, nf = len(HEADS), len(FEATS); self.n_wires, self.entangle = nq, entangle
+        self.E = self.rng.normal(0, .3, (nq, nf)); self.W = self.rng.normal(0, .1, (self.layers, nq, 3))
+        self.base = 0.; self.eps = {}; self._q = None
     def _qnode(self):
         if self._q is None:
             import pennylane as qml
-            nq, L = self.n_wires, self.layers; dev = qml.device("default.qubit", wires=nq)
+            nq, L, ent = self.n_wires, self.layers, self.entangle; dev = qml.device("default.qubit", wires=nq)
+            def ring():
+                for q in range(nq): qml.CNOT(wires=[q, (q + 1) % nq])
             @qml.qnode(dev, interface="autograd", diff_method="backprop")
-            def circ(f, E, B, R):
+            def circ(f, E, W):
+                x = qml.math.tanh(qml.math.tensordot(E, f, axes=[[1], [0]]))*(np.pi/2)
+                qml.AngleEmbedding(x, wires=range(nq), rotation="X"); qml.AngleEmbedding(x, wires=range(nq), rotation="Y")
                 for l in range(L):
-                    ang = qml.math.tensordot(E[l], f, axes=[[1], [0]]) + B[l]
-                    for q in range(nq): qml.RY(ang[q], wires=q); qml.RZ(R[l][q], wires=q)
-                    if nq > 1:
-                        for q in range(nq): qml.CNOT(wires=[q, (q + 1) % nq])
-                return [qml.expval(qml.PauliZ(q)) for q in range(nq)]
+                    for q in range(nq):
+                        for g, op in enumerate((qml.RX, qml.RY, qml.RZ)):
+                            op(W[l][q][g], wires=q)
+                            if ent == "dense": ring()
+                    if ent == "layer": ring()
+                return [qml.expval(qml.PauliX(q)) for q in range(nq)]
             self._q = circ
         return self._q
-    def z(self, f): return np.array(self._qnode()(np.asarray(f, float), self.E, self.B, self.R), dtype=float)
+    def z(self, f): return np.array(self._qnode()(np.asarray(f, float), self.E, self.W), dtype=float)
     def decide(self, obs):
         out = []
         try:
@@ -191,15 +206,15 @@ class CircuitMind(Mind):
         items = [(ri - self.base, self.eps.pop(e["id"])) for e, ri in zip(exps, r) if e["id"] in self.eps]
         if items:
             import pennylane as qml; from pennylane import numpy as pnp; circ = self._qnode()
-            def obj(E, B, R):
+            def obj(E, W):
                 s = 0.
-                for adv, (f, eps) in items: s = s + adv*qml.math.sum(qml.math.stack(circ(pnp.array(f, requires_grad=False), E, B, R))*eps)/self.sigma
+                for adv, (f, eps) in items: s = s + adv*qml.math.sum(qml.math.stack(circ(pnp.array(f, requires_grad=False), E, W))*eps)/self.sigma
                 return s/len(items)
-            gE, gB, gR = qml.grad(obj, argnums=[0, 1, 2])(pnp.array(self.E, requires_grad=True), pnp.array(self.B, requires_grad=True), pnp.array(self.R, requires_grad=True))
-            self.E = np.clip(self.E + self.lr*np.asarray(gE), -3, 3); self.B = self.B + self.lr*np.asarray(gB); self.R = self.R + self.lr*np.asarray(gR)
+            gE, gW = qml.grad(obj, argnums=[0, 1])(pnp.array(self.E, requires_grad=True), pnp.array(self.W, requires_grad=True))
+            self.E = np.clip(self.E + self.lr*np.asarray(gE), -3, 3); self.W = self.W + self.lr*np.asarray(gW)
         self.base += .2*(float(r.mean()) - self.base); self.eps.clear()
-    def summary(self): return dict(super().summary(), wires=self.n_wires, layers=self.layers, heads=HEADS, feats=FEATS, baseline=round(self.base, 5),
-                                   E=np.round(self.E, 4).tolist(), B=np.round(self.B, 4).tolist(), R=np.round(self.R, 4).tolist())
+    def summary(self): return dict(super().summary(), arch="qwrk", wires=self.n_wires, layers=self.layers, entangle=self.entangle, readout="PauliX",
+                                   heads=HEADS, feats=FEATS, baseline=round(self.base, 5), E=np.round(self.E, 4).tolist(), W=np.round(self.W, 4).tolist())
 
 # ---------------------------------------------------------------- talk (Ollama / OpenAI-compatible) - narration only, never steers
 TALK_SYS = ("You narrate a simulated ecosystem. The actions below were ALREADY chosen by a quantum-circuit policy; do not change them. "
@@ -307,6 +322,7 @@ def add_args(ap):
                    help="circuit (alias inceptron): quantum-circuit steering; http is deprecated for steering - use circuit + --mind-talk"); g.add_argument("--mind-url", default=None, help="talk (and legacy http) OpenAI-compatible base, e.g. http://127.0.0.1:11434/v1")
     g.add_argument("--mind-talk", action="store_true", help="after each decide, ask Ollama (--mind-url/--mind-model) for a rationale; logged only, never steers")
     g.add_argument("--mind-talk-log", default=None, help="talk JSONL (default: --mind-trace)"); g.add_argument("--mind-layers", type=int, default=2)
+    g.add_argument("--mind-entangle", default="layer", choices=["layer", "off", "dense"], help="circuit CNOT rings: one per layer (default), none, or after every gate (QWRK-literal)")
     g.add_argument("--mind-model", default=None); g.add_argument("--mind-script", default=None); g.add_argument("--mind-timeout", type=float, default=10.)
     g.add_argument("--mind-every", type=float, default=20., help="world-yr between queries"); g.add_argument("--mind-batch", type=int, default=16)
     g.add_argument("--mind-select", default="random", choices=["random", "energy"]); g.add_argument("--mind-learn", action="store_true")
@@ -316,7 +332,7 @@ def from_args(a, seed=0):
     kw = dict(every=a.mind_every, batch=a.mind_batch, learn=a.mind_learn, trace_path=a.mind_trace, seed=seed, select=a.mind_select)
     if a.mind == "http": kw.update(url=a.mind_url, model=a.mind_model, timeout=a.mind_timeout)
     if a.mind == "script": kw.update(path=a.mind_script)
-    if a.mind in ("circuit", "inceptron"): kw.update(layers=getattr(a, "mind_layers", 2))
+    if a.mind in ("circuit", "inceptron"): kw.update(layers=getattr(a, "mind_layers", 2), entangle=getattr(a, "mind_entangle", "layer"))
     m = make_mind(a.mind, **kw)
     if m is not None and getattr(a, "mind_talk", False):
         m.talk = Talk(url=a.mind_url, model=a.mind_model, timeout=a.mind_timeout, path=getattr(a, "mind_talk_log", None) or a.mind_trace)

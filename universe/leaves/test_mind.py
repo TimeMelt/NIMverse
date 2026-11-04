@@ -120,3 +120,12 @@ def test_talk_does_not_change_actions(tmp_path):
     assert _js(strip(r0)) == _js(strip(r1)) == _js(strip(r2)) and np.array_equal(base.E, talk.E)
     assert seen and "actions" in seen[0]["messages"][1]["content"] and talk.talk.n_calls == talk.n_queries and dead.talk.n_fail > 0
     rows = [json.loads(l) for l in open(tmp_path/"talk.jsonl")]; assert rows[0]["kind"] == "talk" and rows[0]["text"].startswith("They")
+
+def test_circuit_qwrk_structure_and_entangle_flag():
+    import argparse
+    m = M.make_mind("circuit", seed=1); assert m.W.shape == (2, 5, 3) and m.E.shape == (5, len(M.FEATS)) and m.summary()["readout"] == "PauliX"
+    f = M.featurize(_obs()[0]); zs = {e: M.make_mind("circuit", seed=1, entangle=e).z(f) for e in ("layer", "off", "dense")}
+    assert all(z.shape == (5,) for z in zs.values()) and not np.allclose(zs["off"], zs["dense"])
+    m0 = M.make_mind("circuit", seed=1); m0.E[:] = 0; m0.W[:] = 0; assert np.allclose(m0.z(f), 0, atol=1e-9)   # x=0 -> |0> -> <X>=0
+    with pytest.raises(ValueError): M.make_mind("circuit", entangle="ring")
+    ap = argparse.ArgumentParser(); M.add_args(ap); assert M.from_args(ap.parse_args(["--mind", "circuit", "--mind-entangle", "off"]), 1).entangle == "off"
