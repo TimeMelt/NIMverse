@@ -115,6 +115,10 @@ function animate(now){requestAnimationFrame(animate); const t=(now-t0)/1000;
   NIMC.animate(cr,ph,t); NIMC.placeShadow(cr,h,SC*c.size*Math.max(.01,s));}
  if(sel!=null&&crs.get(sel)){const p=crs.get(sel).g.position, dl=p.clone().sub(controls.target); controls.target.add(dl); camera.position.add(dl); controls.minDistance=.002;}
  [core,cloud].forEach(m=>{if(m)m.material.uniforms.uTime.value=t;}); controls.update(); const dist=camera.position.length()-1; camera.near=Math.max(.0003,dist*.02); camera.updateProjectionMatrix(); renderer.render(scene,camera);}
+// look toggle (?look=photo, key P, HUD button): rebuild live creature bodies in place
+function setLook(l){NIMC.setLook(l); NIMC.applyLookLights(renderer); for(const cr of crs.values()){cr.g.remove(cr.body); cr.g.remove(cr.shadow); cr.body.traverse(o=>{if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose();});
+  const B=NIMC.build(cr.c); cr.body=B.body; cr.limbs=B.limbs; cr.shadow=B.shadow; cr.g.add(B.body); cr.g.add(B.shadow); B.body.traverse(o=>{if(o.isMesh) o.userData.id=cr.c.id;});} lookBtn.refresh(); return NIMC.getLook();}
+NIMC.applyLookLights(renderer); const lookBtn=NIMC.lookUI(()=>setLook(NIMC.getLook()));
 requestAnimationFrame(animate);
-window.NIM={ready:true, last:()=>last, raw:()=>lastRaw, focus:()=>focus, setFocus, control, ticks:()=>nTicks, n:()=>crs.size, cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t);}, select:showSel};
+window.NIM={ready:true, setLook, look:()=>NIMC.getLook(), last:()=>last, raw:()=>lastRaw, focus:()=>focus, setFocus, control, ticks:()=>nTicks, n:()=>crs.size, cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t);}, select:showSel};
 })();

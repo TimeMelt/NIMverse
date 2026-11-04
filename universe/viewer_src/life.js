@@ -45,6 +45,12 @@ function pathAt(P,u){u=Math.min(1,Math.max(0,u))*(P.length-1); const i=Math.min(
 const REPLAY=10;   // time units for one replay of the recorded path (oldest sample -> current position), then hold
 function replayU(t){return Math.min(1,Math.max(0,(t-1)/REPLAY));}
 for(let k=0;k<C.length;k++) crs.push(creature(k));
+// look toggle (stylized default | photo): rebuild every creature body in place with the shared builder
+function setLook(l){NIMC.setLook(l); NIMC.applyLookLights(renderer); tris=0; pickables.length=0;
+ crs.forEach((cr,k)=>{cr.g.remove(cr.body); cr.g.remove(cr.shadow); cr.body.traverse(o=>{if(o.geometry)o.geometry.dispose(); if(o.material)o.material.dispose();});
+  const B=NIMC.build(cr.c); cr.body=B.body; cr.limbs=B.limbs; cr.shadow=B.shadow; cr.g.add(B.body); cr.g.add(B.shadow); tris+=B.tris; B.body.traverse(o=>{if(o.isMesh){o.userData.k=k; pickables.push(o);}});});
+ setTime(T); if(lookBtn) lookBtn.refresh(); return NIMC.getLook();}
+let lookBtn=null; NIMC.applyLookLights(renderer);
 // tech: lit structures + city lights near herds of the most mobile cohort
 const tech=[]; if(D.tech>0){let x=99; const rnd=()=>{x=(x*16807)%2147483647; return x/2147483647;}; const base=crs[0].p0;
  for(let i=0;i<Math.round(14*D.tech);i++){const p=base.clone().add(new V3(rnd()-.5,rnd()-.5,rnd()-.5).multiplyScalar(.6)).normalize();
@@ -83,6 +89,6 @@ function follow(){if(mode==='creature'&&sel>=0){const p=crs[sel].g.position; con
 function render(){follow(); controls.update(); const dist=camera.position.length()-1; camera.near=Math.max(.0003,dist*.02); camera.updateProjectionMatrix(); renderer.render(scene,camera);}
 let playing=true, last=performance.now();
 function loop(now){requestAnimationFrame(loop); if(playing){setTime(T+Math.min(.05,(now-last)/1000));} last=now; render();}
-setTime(0); view('orbit'); requestAnimationFrame(loop);
-window.NIM={ready:true, view, setTime, render, still(){playing=false;}, play(){playing=true;}, creatures:C, tris:()=>tris, pos:i=>crs[i].g.position.toArray(), cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t); render();}};
+setTime(0); view('orbit'); lookBtn=NIMC.lookUI(()=>setLook(NIMC.getLook())); requestAnimationFrame(loop);
+window.NIM={ready:true, view, setLook, look:()=>NIMC.getLook(), setTime, render, still(){playing=false;}, play(){playing=true;}, creatures:C, tris:()=>tris, pos:i=>crs[i].g.position.toArray(), cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t); render();}};
 })();

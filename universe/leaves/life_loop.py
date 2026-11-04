@@ -113,7 +113,7 @@ class HabitatRun:
             for d in inds:
                 if trail_max and d.get("trail"): d["trail"] = d["trail"][-int(trail_max):]
                 else: d.pop("trail", None)
-            crs = [{kk: c[kk] for kk in ("id", "lat", "lon", "species_id", "plan", "size", "limbs", "segments", "shell", "shell_k", "color", "accent", "glow", "speed", "wobble",
+            crs = [{kk: c[kk] for kk in ("id", "lat", "lon", "species_id", "plan", "size", "limbs", "segments", "shell", "shell_k", "color", "accent", "glow", "morph", "speed", "wobble",
                                           "phase", "heading", "traits", "generation", "age", "energy", "parent_id", "parent2_id", "trail") if kk in c}
                    for c in CL.creatures_from_individuals(inds, seed, flux.to_dict(), self.h.ptype, max_show)]
         cd = cu.to_dict() if self.culture else {}

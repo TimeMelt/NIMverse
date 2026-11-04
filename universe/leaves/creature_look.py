@@ -15,18 +15,38 @@ def cohorts_from_report(pl, LP, seed, k=8):
         out.append(dict(n=float(cr.get("n", 1.))*float(r.dirichlet(np.ones(k))[0] if i else .4), traits=tr, synthetic=bool(i)))
     return out
 
-def phenotype(tr, seed, i, pig=0., tech=0., ptype="ocean"):
-    r = _rng(seed, i); mob, met, rep, hard = (tr[t] for t in TRAITS)
+MORPH_DEFAULTS = dict(elong=1., girth=1., head=1., eye=1., fin=1., seg_space=1., seg_taper=.05, wing_span=1., wing_aspect=1., tail=1.,
+                      shell_ridges=.5, shell_dome=1., spines=1., tent_len=1., bell_flat=1., stripe=0., stripe_freq=6., spot=0., skin_detail=.5)
+
+def morph(tr, rs, ri, plan):
+    """Continuous morph fields (viewer-only). rs = species rng (shared by the herd), ri = individual rng (small jitter).
+    Traits set the trend, the species draw sets the 'family look', individuals vary ~5%."""
+    mob, met, rep, hard = (float(tr[t]) for t in ("mobility", "metabolism_eff", "reproduction_rate", "hardiness")); S = {k: rs.normal() for k in MORPH_DEFAULTS}; I = {k: ri.normal() for k in MORPH_DEFAULTS}
+    v = lambda k, base, sp, ind=.05, lo=.4, hi=2.2: float(np.clip(base*(1+sp*S[k]+ind*I[k]), lo, hi))
+    return dict(elong=v("elong", .8+.45*mob, .12), girth=v("girth", 1.25-.4*mob+.2*met, .1), head=v("head", .9+.25*met, .1), eye=v("eye", 1.3-.5*met+.3*(plan == "floater"), .15),
+                fin=v("fin", .7+.6*mob, .15), seg_space=v("seg_space", .8+.35*mob, .1, lo=.6, hi=1.5), seg_taper=float(np.clip(.03+.05*rep+.02*S["seg_taper"], 0, .12)),
+                wing_span=v("wing_span", .75+.6*mob, .12), wing_aspect=v("wing_aspect", .8+.8*mob-.3*met, .15, lo=.5, hi=2.), tail=v("tail", .8+.4*mob, .15),
+                shell_ridges=float(np.clip(hard+.15*S["shell_ridges"]+.03*I["shell_ridges"], 0, 1)), shell_dome=v("shell_dome", .8+.5*hard, .12, lo=.5, hi=1.6),
+                spines=v("spines", .6+.8*hard, .2, lo=.2), tent_len=v("tent_len", .8+.5*met+.3*(1-mob), .15), bell_flat=v("bell_flat", 1., .15, lo=.6, hi=1.5),
+                stripe=float(np.clip(.5+.35*S["stripe"], 0, 1) if S["spot"] < .3 else 0.), stripe_freq=float(np.clip(6+2.5*S["stripe_freq"], 2, 12)),
+                spot=float(np.clip(.6+.3*S["spot"], 0, 1) if S["spot"] >= .3 else 0.), skin_detail=float(np.clip(.5+.3*hard+.15*S["skin_detail"], 0, 1)))
+
+def phenotype(tr, seed, i, pig=0., tech=0., ptype="ocean", species_id=None):
+    """species_id given -> plan, palette and morph family drawn from a species rng (herds look related); id rng adds jitter."""
+    ri = _rng(seed, i); rs = _rng(seed, 9*10**6 + int(species_id)) if species_id is not None else ri
+    r = rs; mob, met, rep, hard = (tr[t] for t in TRAITS)
     water = ptype in ("ocean", "terran")
     w = np.array([(.8 if water else .1)*(.5+mob), (1.2-mob)*(.6 if water else 1.2), max(0, mob-.45)*2.0, (.6 if water else .1)*(1.1-mob)])
     plan = ["swimmer", "crawler", "flyer", "floater"][int(r.choice(4, p=w/w.sum()))]
     size = float((.6+1.1*met)*(1.3-.6*rep)*(.8+.4*r.random()))
-    hue = (.33 + .45*pig + .7*r.random()) % 1.; sat = .35+.6*min(1, pig*1.4)
+    size = size*(1+.08*ri.normal()) if species_id is not None else size
+    hue = (.33 + .45*pig + .7*r.random() + (.025*ri.normal() if species_id is not None else 0)) % 1.; sat = .35+.6*min(1, pig*1.4)
     col = colorsys.hsv_to_rgb(hue, sat, .55+.4*r.random()); col2 = colorsys.hsv_to_rgb((hue+.5+.1*r.random()) % 1, sat, .9)
     return dict(plan=plan, size=size, limbs=int(0 if plan == "floater" else 2+2*round(2*mob+2*r.random())),
                 segments=int(2+round(3*rep+r.random())), shell=bool(hard > .45 + .1*r.random()), shell_k=float(hard),
                 color=[float(c) for c in col], accent=[float(c) for c in col2], glow=float(min(1, pig*1.6*(.4+met)) if r.random() < .3+pig else 0.),
-                speed=float(.2+1.6*mob*(.8+.4*r.random())), wobble=float(r.random()*6.283), tech=float(tech))
+                speed=float(.2+1.6*mob*(.8+.4*r.random())), wobble=float(r.random()*6.283), tech=float(tech),
+                morph=morph(tr, _rng(seed, 9*10**6+int(species_id)+1) if species_id is not None else _rng(seed, 3*10**6+i), _rng(seed, 8*10**6+i), plan))
 
 def creatures(cohorts, seed, biosign, ptype, max_total=60):
     """List of individual creatures (JSON-serialisable): each cohort contributes individuals proportional to n (>=2)."""
@@ -51,7 +71,7 @@ def creatures_from_individuals(inds, seed, biosign, ptype, max_show=64):
     out = []
     for d in inds:
         tr = {t: float(d["traits"][t]) for t in TRAITS}; sp = int(d.get("species_id", 0))
-        base = phenotype(tr, seed, 10**6 + int(d["id"]), pig, tech, ptype)
+        base = phenotype(tr, seed, 10**6 + int(d["id"]), pig, tech, ptype, species_id=sp)
         r = _rng(seed, 7*10**6 + int(d["id"]))
         if d.get("lat") is not None and d.get("lon") is not None: lat, lon, real = float(d["lat"]), float(d["lon"]), True   # simulated position
         else:                                   # legacy reports without positions: species home-range herd placement
