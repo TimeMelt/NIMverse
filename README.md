@@ -435,3 +435,68 @@ How to check: `python -m pytest universe/leaves/test_physics15.py universe/leave
 - Secular theory is linear + weak 2nd-order / near-resonant terms — no chaos, no full N-body, no GR.
 - Trophic structure is guild + mass-gap predation inside cells, not a full food-web or size-spectrum model.
 - The broader test suites are still slow (~10 min for the main three).
+
+## Solvers (out-of-leaf)
+
+`universe/solvers/` holds numpy/scipy solvers that can replace the leaves' parameterised proxies. **They are all opt-in.** With
+no flags, every leaf path, checkpoint, and live-mode run behaves exactly as before. Seed 4 `smoke_physics15` still gives planet2
+biomass .871 at T 267.0 K. Flags are shared by `run_life`, `run_life_live`, and `smoke_physics15` (`solvers.add_args`/`from_args`):
+
+| flag | module | replaces |
+|---|---|---|
+| `--climate-model gcm2d` | `solvers.climate2d` | `leaves.world.LatClimate`: a 24 lat × 36 lon equal-area EBM with continents, ocean deep layer, frequency-domain seasons, diffusion-decay hydrology, and land-only weathering (`GCMCarbon`) |
+| `--rt` (needs gcm2d) | `solvers.rt` | greenhouse-offset OLR/albedo: 11-band LW k-distribution two-stream (H2O lines + continuum, CO2, CH4, O3) plus 4-band delta-Eddington SW with adding; RCE; cached OLR/albedo tables fed CO2/CH4/O2→O3 from biogeochem |
+| `--foodweb` | `solvers.foodweb` | `leaves.biosphere.step`: mass-conserving Nut/Det + producers/herbivores/carnivores/apex/decomposers guild ODE (Monod uptake, Beddington–DeAngelis grazing), mapped back to the P/C/D Biosphere API |
+| `--orbit-solver nbody\|secular\|off` | `solvers.secular_nbody` | leaf `SecularOrbit`: Wisdom–Holman N-body (1PN, MEGNO) for 20 kyr, then full Laplace–Lagrange e+i theory; spin axis from Colombo's top against the true orbit normal (obliquity, climatic precession) |
+| `--stellar-solver` | `solvers.stellar_track` | `leaves.stellar.track` power laws: ODE MS burn (homology μ⁴, faint young Sun) → subgiant → RGB (core-mass–luminosity, Reimers loss) → clump |
+| config/EP `"gr_solver": true` | `solvers.gr` | adds `gr_*` fields to TDE/quasar/merger log entries in `events.run_events`: Kerr ISCO/photon/horizon, η, marginally-bound capture flag, ISCO GW frequency, chirp mass. Logging only; dynamics and RNG are unchanged |
+
+API: `HabitatRun(..., climate_model="gcm2d", orbit=driver, solvers={...})` and `life_loop(..., climate_model, solvers=dict)`.
+Reports gain a `"solvers"` block (`HabitatRun.solver_report()`) only when solvers are on. gcm2d adds `grid_*` per-cell stressors.
+`individuals.band_values` uses these when present, so organisms feel their own cell. `HostWeather.solver_track="semi"` switches the
+stellar track, including `summary()["t_ms_Gyr"]`. The library also includes `gr.geodesic`, `gr.periastron_advance`, `gr.inspiral`,
+`rt.rce`, and `rt.radiation`.
+
+Fidelity (tested in `universe/solvers/test_solvers.py`, 15 tests incl. live checkpoint restore):
+- rt: Earth column clear-sky OLR ≈ 265 W/m² at 288 K with logarithmic CO2 forcing.
+- gcm2d: the transport operator has zero row sums, so energy is conserved, and |TOA| < 5 W/m² at equilibrium.
+- foodweb: mass is conserved to round-off and the trophic pyramid emerges.
+- N-body vs. secular: e(t) agrees, and MEGNO ≈ 2.
+- GR: closed forms and Kerr circular period match, and the periastron advance and Peters time are correct.
+- stellar: Sun L(4.57)/L_ZAMS = 1/0.72, t_MS ≈ 10 Gyr, and the RGB climbs.
+- events: the gr hook changes no dynamics or log types.
+- live mode: `LiveSim` with gcm2d+foodweb+secular+stellar solver restores from checkpoints deterministically.
+
+Gaps:
+- **RT:** a band model with no CIA, no CO2 condensation, and no runaway. Under `--rt` with high pCO2, cold planets therefore
+  under-absorb. Seed-4 planet3 (pCO2 ≈ 25–30 bar) ends as a 121 K snowball, where the leaf gives 246 K.
+- **gcm2d:** no dynamics, no explicit clouds, and diurnally averaged insolation. The CO2 snowball limit cycle starts from a
+  converged warm branch (`_settle`).
+- **foodweb:** guilds, not species.
+- **Orbits:** point masses. No tides or satellites. Laplace–Lagrange is linear in e and i. The spin constant is Earth–Moon
+  calibrated and scaled by spin·M*/a³.
+- **GR:** test-particle, 0PN Peters, no ringdown.
+- **stellar:** no pre-MS, AGB/WD, or metallicity. It only matters when `stellar_evolve > 0`, because the default is a frozen star.
+  For example, `run_life --seed 4 --years 3000 --params p.json` with `{"stellar_evolve": 1, "stellar_age_rate": 2e6}` (clamped
+  to 1e6) ages the 1.45 Msun host by 3 Gyr. The leaf gives L 8.81 Lsun, t_MS 3.92 Gyr. `--stellar-solver` gives L 9.42 Lsun,
+  t_MS 3.78 Gyr. Life persists on planet2 and planet3 in both runs.
+
+Seed 4, 3000 yr (`python -m universe.smoke_physics15 --years 3000 [flags]`):
+
+| flags | planet2 result |
+|---|---|
+| default | .871 / 267 K |
+| `--climate-model gcm2d` | alive, .80 / 266 K |
+| `--climate-model gcm2d --rt` | alive, 1.85 / 302 K (life-made CH4 warms it); planet3 dies (RT gap above) |
+| `--foodweb` | alive, .53, 5 guilds |
+| `--orbit-solver nbody` / `secular` | alive, ≈.08 / 264 K |
+
+The orbit-solver result is lower because planet1, drawn at 6° inclination, swings planet2's orbit plane. Obliquity rises from
+21° to 27° over 3 kyr, against a near-constant 18° in the leaf, and the cold planet drifts into a snowball regime.
+
+```
+pytest universe/solvers/test_solvers.py
+python -m universe.smoke_physics15 --years 3000 --climate-model gcm2d --rt
+python -m universe.run_life --seed 4 --years 3000 --foodweb --orbit-solver secular
+python -m universe.run_life_live --seed 4 --climate-model gcm2d
+```

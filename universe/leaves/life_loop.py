@@ -30,7 +30,7 @@ class HabitatRun:
     years=None -> open-ended (continuous mode): ser_every falls back to `ser_every` (default 50*dt)."""
     def __init__(self, h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
                  culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40, ser_every=None, mind=None,
-                 climate_model="lat", orbit=None):
+                 climate_model="lat", orbit=None, solvers=None):
         self.P = P = as_bus(LP); self.hw = copy.deepcopy(hw); self.h = h = copy.deepcopy(h); self.chem = chemistry.init_chem(h); self.gate = chemistry.planted_gate(0.) if plant else None
         self.rng, self.dt, self.years, self.organisms_after, self.disturb_at = rng, dt, years, organisms_after, disturb_at
         self.culture, self.catalog, self.emit_every, self.culture_min_age, self.record, self.model, self.n_founders = culture, catalog, emit_every, culture_min_age, record, model, n_founders
@@ -41,8 +41,16 @@ class HabitatRun:
         self.orng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 23])        # own stream for organisms: life draws never shift impacts/abiogenesis timing
         self.drift = world.ClimateDrift(P["climate_drift"], self.drng) if P["climate_drift"] > 0 else None
         self.climate_model = climate_model; self.lat = self.carbon = self.bgc = None
+        # out-of-leaf solvers (universe.solvers; all opt-in): rt, foodweb, stellar_solver (orbit_solver is applied in life_loop)
+        self.solvers = sv = dict(solvers or {}); self.fw = None
+        if sv.get("stellar_solver"): self.hw.solver_track = "semi"
         if climate_model == "lat":      # physics15: latitudinal EBM + carbon-silicate cycle (started at its weathering equilibrium)
             self.lat, self.carbon = biogeochem.init_climate(h, self.hw, P, orbit); self.bgc = biogeochem.Biogeochem(self.carbon)
+        elif climate_model == "gcm2d":  # solvers.climate2d: lat x lon EBM-GCM (+ two-stream RT if sv["rt"]) + land-cell weathering
+            from ..solvers import climate2d
+            self.lat, self.carbon = climate2d.init_gcm2d(h, self.hw, P, orbit, rt_on=bool(sv.get("rt"))); self.bgc = biogeochem.Biogeochem(self.carbon)
+        if sv.get("foodweb"):
+            from ..solvers import foodweb; self.fw = foodweb.FoodWeb()
         self.hist = world.ClimateHistory(n=4000); self.cu = culture_mod.Culture(); self.tstress = {}; self.peak = {}; self.n_imp = 0; self.impact_loss = 0.; self.k = 0
 
     @property
@@ -64,6 +72,8 @@ class HabitatRun:
             # log-CO2 greenhouse + feedbacks); the long tail of fossil carbon goes to C_inorg in carbon.step.
             if tstress: stress["dT"] -= tstress.get("tech_greenhouse_K", 0.)
             self.lat.tech_co2_mult = float(2.**(tstress.get("tech_greenhouse_K", 0.)/P["co2_sens_K"])) if tstress else 1.
+            if self.climate_model == "gcm2d" and self.bgc is not None:     # life's O2 (-> O3) and CH4 feed the radiative transfer
+                xo, xm = self.bgc.mixing_ratios(); self.lat.set_trace(xo, min(xm, 1e-2))
             clim = self.lat.step(h, hw, P, dt, stress, t)
             cu0 = self.cu; fint = cu0.energy_mix.get("fossil", 0.)*(1 - .5*cu0.mitigation) if (self.culture and cu0.active) else 0.
             clim.stressors.update(self.carbon.step(self.lat, P, dt, float(cu0.level) if self.culture else 0., fint))
@@ -76,7 +86,10 @@ class HabitatRun:
         if self.culture and (cu.active or cu.pollution > 0): chem = culture_mod.apply_chem(chem, cu, P, dt)   # last step's industry -> organics/redox
         gate = self.gate = chemistry.abiogenesis_roll(chem, clim, P, rng, t, dt, self.gate)
         bio = biosphere.seed(self.bio, gate); m0 = bio.total()
-        led = {}; bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist, growth_mult=self.bgc.growth_mult if self.bgc else 1., ledger=led)
+        led = {}; gm = self.bgc.growth_mult if self.bgc else 1.
+        if self.fw is not None:
+            from ..solvers import foodweb; bio, niche, flux = foodweb.step(self.fw, bio, clim, chem, P, dt, dist, growth_mult=gm, ledger=led)
+        else: bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist, growth_mult=gm, ledger=led)
         B_mid = bio.total()
         if tstress.get("tech_footprint"): niche.resources = float(niche.resources*(1 - min(tstress["tech_footprint"], 1.)))   # last step's draw
         if clim.stressors.get("impacts"): self.n_imp += clim.stressors["impacts"]; self.impact_loss += m0*clim.stressors["impact_kill"]
@@ -146,6 +159,15 @@ class HabitatRun:
                     tech=float(flux.tech), culture=cult, n_alive=int(n_alive), n_species=int(len(np.unique(pop.species))) if n_alive else 0,
                     births=int(pop.n_births) if pop is not None else 0, impacts=int(self.n_imp), creatures=crs)
 
+    def solver_report(self):
+        d = dict(self.solvers, climate_model=self.climate_model)
+        if self.fw is not None: d["foodweb"] = self.fw.summary()
+        if self.climate_model == "gcm2d" and self.lat is not None:
+            L = self.lat.last; d["gcm2d"] = dict(toa_imbalance=float(L.get("toa_imbalance", 0.)), rt=bool(self.lat.rt), co2_limit_cycle=bool(self.lat.limit_cycle),
+                                                pCO2_bar=float(self.lat.pCO2), x_o2=float(self.lat.x_o2), x_ch4=float(self.lat.x_ch4))
+        if self.hw.solver_track: d["stellar"] = dict(track=self.hw.solver_track, phase=self.hw.phase, age_Gyr=float(self.hw.age_Gyr), L=float(self.hw.L_star), T_eff=float(self.hw.T_eff))
+        return d
+
     def report(self):
         P, h, hw, pop, clim, flux, cu, pkt, series, model = self.P, self.h, self.hw, self.pop, self.clim, self.flux, self.cu, self.pkt, self.series, self.model
         if pop is not None and (not pop.series or pop.series[-1]["t_w"] < pop.t): pop.series.append(pop.stats())
@@ -161,15 +183,16 @@ class HabitatRun:
                     creatures=pkt.to_dict() if pkt else None, organism_model=model,
                     individuals=(evo or {}).get("individuals"), evolution=({k: v for k, v in evo.items() if k != "individuals"} if evo else None), biomass_series=[float(x) for x in series[::max(1, len(series)//50)]],
                     score=dict(eco_stability=ScoreBus.eco_stability(series), planted_life=ScoreBus.planted_life(self.bio.alive)),
+                    **({"solvers": self.solver_report()} if (self.solvers or self.climate_model == "gcm2d") else {}),
                     **({"mind": self.mind.summary()} if getattr(self.mind, "active", False) else {}))
 
 def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
                 culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40, mind=None,
-                climate_model="lat", orbit=None):
+                climate_model="lat", orbit=None, solvers=None):
     """model="individuals" (default): literal organisms with ids/parents + evolution (leaves.individuals); "cohorts": legacy cohort model.
     Finite wrapper over HabitatRun (same rng order -> identical reports)."""
     run = HabitatRun(h, hw, LP, rng, years, dt, plant, organisms_after, disturb_at, culture, catalog, emit_every, culture_min_age, record, model, n_founders, mind=mind,
-                     climate_model=climate_model, orbit=orbit)
+                     climate_model=climate_model, orbit=orbit, solvers=solvers)
     for _ in range(int(years/dt)): run.step()
     return run.report()
 
@@ -179,17 +202,23 @@ def run_habitat_continuous(h, hw, LP, rng, dt=10., plant=False, culture=True, ma
     yield from run.frames(max_years, emit_every, stop)
 
 def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, culture=True, distance_pc=None, observers=None,
-              emit_every=None, M_override=None, record=None, model="individuals", mind=None, climate_model="lat", secular=True):
-    """climate_model="lat" (physics15 default): latitudinal EBM + carbon cycle (+ secular orbit drivers if `secular`); "box": v1 0-D."""
+              emit_every=None, M_override=None, record=None, model="individuals", mind=None, climate_model="lat", secular=True, solvers=None):
+    """climate_model="lat" (physics15 default): latitudinal EBM + carbon cycle (+ secular orbit drivers if `secular`); "box": v1 0-D;
+    "gcm2d": universe.solvers.climate2d lat x lon EBM-GCM.  solvers (opt-in, universe.solvers): dict(rt=bool, foodweb=bool,
+    stellar_solver=bool, orbit_solver="nbody"|"secular"|"off"|None) -- None/{} keeps the leaf defaults bit-for-bit."""
     P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override, seed=seed)
     cat = ObserverCatalog(observers or [Observer("obs0", hw.distance_pc)])
     ee = emit_every or max(1, int(years/dt)//400)
     habs = habitats_from_system(S, seed, P); rep = []
     from .orbit_climate import drivers_from_system
-    orbs = drivers_from_system(S, habs, seed) if (secular and climate_model == "lat") else {}
+    sv = dict(solvers or {}); osv = sv.get("orbit_solver")
+    if sv.get("stellar_solver"): hw.solver_track = "semi"
+    if osv and climate_model in ("lat", "gcm2d"):
+        from ..solvers import secular_nbody; orbs = secular_nbody.drivers_from_system(S, habs, seed, osv)
+    else: orbs = drivers_from_system(S, habs, seed) if (secular and climate_model in ("lat", "gcm2d")) else {}
     for h in habs:
         if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee, record=record, model=model, mind=mind,
-                                                climate_model=climate_model, orbit=orbs.get(h.planet_id)))
+                                                climate_model=climate_model, orbit=orbs.get(h.planet_id), solvers=sv or None))
         else: rep.append(dict(habitat=h.to_dict(), skipped="not rocky near-HZ"))
     cat.poll(years)
     clims = [world.step(h, hw, P) for h in habs]

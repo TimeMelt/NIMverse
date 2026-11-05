@@ -21,6 +21,7 @@ from .leaves import world
 from .leaves.packets import as_bus
 from .leaves.life_loop import host_weather, HabitatRun
 from .leaves import mind as mind_mod
+from . import solvers as solvers_mod
 from .leaves.system_habitat import habitats_from_system, candidate
 HERE = os.path.dirname(__file__)
 
@@ -52,8 +53,9 @@ class LiveSim:
     """Steps one (default) or all plantable habitats (multi=True) in lockstep, with server-side pause/speed and a ring-buffer history.
     Single mode: payload is the plain HabitatRun.tick (+ seq/paused/... meta), unchanged default_rng(seed) trajectory.
     Multi mode: payload = {t_w, step, focus, planets:[tick per planet], + meta}."""
-    def __init__(self, seed=4, dt=20., plant=False, culture=True, params=None, config=None, distance_pc=10., planet=None, max_show=48, rng="numpy", multi=False, history=200, realtime_s=.05, ckpt_every=10, ckpt_depth=None, trail_max=24, mind=None):
-        """mind: None (default) or a factory seed -> leaves.mind object (one independent mind per planet run)."""
+    def __init__(self, seed=4, dt=20., plant=False, culture=True, params=None, config=None, distance_pc=10., planet=None, max_show=48, rng="numpy", multi=False, history=200, realtime_s=.05, ckpt_every=10, ckpt_depth=None, trail_max=24, mind=None, climate_model="lat", solvers=None):
+        """mind: None (default) or a factory seed -> leaves.mind object (one independent mind per planet run).
+        climate_model / solvers: opt-in universe.solvers (see life_loop); defaults keep the leaf behaviour."""
         C = json.load(open(config or os.path.join(HERE, "config3.json"))); C = {**C, "asteroids": C.get("eval", {}).get("asteroids", 40)}
         if rng == "nim": from .nim_rng import NIMRandom
         r = NIMRandom(seed) if rng == "nim" else np.random.default_rng(seed)
@@ -64,8 +66,13 @@ class LiveSim:
         if h0 not in hs: hs = [h0] + hs
         self.multi = len(hs) > 1 or (multi and not planet)
         self.seed, self.max_show = seed, max_show
+        sv = dict(solvers or {}); orbs = {}
+        if sv.get("stellar_solver"): hw.solver_track = "semi"
+        if sv.get("orbit_solver") and climate_model in ("lat", "gcm2d"):
+            from .solvers import secular_nbody; orbs = secular_nbody.drivers_from_system(S, habs, seed, sv["orbit_solver"])
         self.runs = [HabitatRun(h, hw, LP, np.random.default_rng(planet_seed(seed, h.name) if self.multi else seed), None, dt, plant, culture=culture,
-                                mind=mind(planet_seed(seed, h.name) if self.multi else seed) if mind else None) for h in hs]
+                                mind=mind(planet_seed(seed, h.name) if self.multi else seed) if mind else None,
+                                climate_model=climate_model, orbit=orbs.get(h.planet_id), solvers=sv or None) for h in hs]
         self.run = self.runs[[h.name for h in hs].index(h0.name)]
         hd = h0.to_dict(); self.focus = hd["name"]
         pls = [dict(planet=x.to_dict()["name"], ptype=x.to_dict()["ptype"], in_hz=bool(x.in_hz), look=planet_look(seed, x.to_dict())) for x in hs]
@@ -274,12 +281,13 @@ def main(argv=None):
     ap.add_argument("--token", default=None, help="require Bearer token / ?token= on every endpoint but /")
     ap.add_argument("--token-env", default=None, help="read the token from this environment variable")
     ap.add_argument("--auth", action="store_true", help="require a token; auto-generated and printed if --token/--token-env not given")
-    mind_mod.add_args(ap); a = ap.parse_args(argv)
+    mind_mod.add_args(ap); solvers_mod.add_args(ap); a = ap.parse_args(argv); cm, sv = solvers_mod.from_args(a)
     token = a.token or (os.environ.get(a.token_env) if a.token_env else None)
     if a.token_env and not token: ap.error(f"--token-env {a.token_env}: variable empty or unset")
     if a.auth and not token: token = secrets.token_urlsafe(16)
     sim = LiveSim(a.seed, a.dt, a.plant, a.culture, a.params, a.config, a.distance_pc, a.planet, a.max_show, a.rng, a.multi, a.history, a.realtime_s,
-                  a.ckpt_every, a.ckpt_depth or None, a.trail_max, mind=(lambda s: mind_mod.from_args(a, s)) if a.mind != "none" else None)
+                  a.ckpt_every, a.ckpt_depth or None, a.trail_max, mind=(lambda s: mind_mod.from_args(a, s)) if a.mind != "none" else None,
+                  climate_model=cm, solvers=sv)
     srv, th = serve(sim, a.port, a.host, a.max_years or None, a.emit_every, a.realtime_s, token)
     q = f"?token={token}" if token else ""
     print(f"live: {sim.info['title']} ({sim.info['ptype']}) -> http://{a.host}:{srv.server_address[1]}/{q}  (Ctrl+C to stop)" + ("  [auth on]" if token else ""), flush=True)

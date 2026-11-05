@@ -197,8 +197,14 @@ def climate_stress(climate):
     return float(WATER_W*(1 - w) + abs(T - 293.)/80.)
 
 def band_values(climate, pos, key):
-    """Per-individual value of a per-band stressor list (LatClimate packet) at each individual's latitude, or None."""
-    v = (getattr(climate, "stressors", None) or {}).get(key)
+    """Per-individual value of a per-band stressor list (LatClimate packet) at each individual's latitude, or None.
+    A lat x lon grid twin ("grid_" + key[4:], from universe.solvers.climate2d) is used when present (cell lookup)."""
+    st = getattr(climate, "stressors", None) or {}; v = st.get(key)
+    g = st.get("grid_" + key[4:]) if key.startswith("lat_") else None
+    if g is not None and len(g) and len(pos):
+        g = np.asarray(g, float); n, nl = g.shape
+        b = np.clip(((pos[:, 1] + 1)*.5*n).astype(int), 0, n - 1); lo = ((np.arctan2(pos[:, 2], pos[:, 0]) + np.pi)/(2*np.pi)*nl).astype(int) % nl
+        return g[b, lo]
     if v is None or not len(v): return None
     v = np.asarray(v, float); b = np.clip(((pos[:, 1] + 1)*.5*len(v)).astype(int), 0, len(v) - 1); return v[b]
 

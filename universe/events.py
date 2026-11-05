@@ -56,6 +56,11 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
     # stay put: default SMBHs ~1e8.5-1e9 Msun are above the Hills mass for sun-like stars, so a hard gate swallows nearly all);
     # "strict"/True relabels R_tde<r_s as "swallowed whole" (not luminous, no AGN fuel); False/"off" = legacy (no fields).
     sfg = EP.get("sf_gate", C.get("sf_gate", "tag")); sfg = {True: "strict", False: "off"}.get(sfg, sfg); bhM = {}
+    # opt-in universe.solvers.gr (config/EP "gr_solver": true): extra gr_* fields (Kerr ISCO/photon/horizon, eta, capture flag,
+    # chirp mass) on TDE / quasar / merger entries.  Logging only: dynamics, RNG draws and the default log are unchanged.
+    grf = None
+    if EP.get("gr_solver", C.get("gr_solver", False)):
+        from .solvers import gr as _gr; grf = _gr.event_fields
     se2 = float(C["star_soft"]**2); log = []; triggered = 0; Mref = float(np.median(m[smbh])) if smbh else 1.
     def srcs(): return np.where((kind == 0) | (kind == SMBH) | (kind == SBH))[0]
     def acc():
@@ -98,7 +103,8 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                     p = m[b]*v[b] + .5*m[j]*v[j]; m[b] += .5*m[j]; v[b] = p/m[b]; kind[j] = GONE; m[j] = 0.
                     if kind[b] == SMBH: accreted[int(b)] += 1; fresh[int(b)] = fresh[int(b)] or lum   # swallowed whole: no disk -> no AGN fuel
                     log.append(dict(type="tidal disruption" if lum else "swallowed whole", **({"swallowed": not fid["visible"]} if fid else {}), t=t, frame=fr, i=int(j), b=int(b),
-                                    g=int(gid[b]), x=x[b].tolist(), mass=float(sm[j]), **fid))
+                                    g=int(gid[b]), x=x[b].tolist(), mass=float(sm[j]), **fid,
+                                    **(grf(Mb, 0., r_peri_au=bh_fidelity(Mb, float(sm[j]))["r_tde"], m2_msun=float(sm[j])) if grf else {})))
             # 3) SMBH mergers
             sb = [b for b in smbh if kind[b] == SMBH]
             for p_ in range(len(sb)):
@@ -109,7 +115,8 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                         M1, M2 = m[b1], m[b2]; v[b1] = (M1*v[b1]+M2*v[b2])/(M1+M2); x[b1] = (M1*x[b1]+M2*x[b2])/(M1+M2)
                         m[b1] = .95*(M1+M2); m[b2] = 0.; kind[b2] = GONE; active[int(b1)] = True; until[int(b1)] = t + duty
                         log.append(dict(type="black hole merger", t=t, frame=fr, i=int(b1), b=int(b2), g=int(gid[b1]), g2=int(gid[b2]), x=x[b1].tolist(),
-                                        mass=float(M1+M2), gw_energy=.05*float(min(M1, M2))))
+                                        mass=float(M1+M2), gw_energy=.05*float(min(M1, M2)),
+                                        **(dict(grf(float(M1+M2)*MASS_UNIT_MSUN), gr_chirp_msun=float((M1*M2)**.6/(M1+M2)**.2)*MASS_UNIT_MSUN) if grf else {})))
             # 4) AGN switch-on: fed SMBHs light up with probability agn_prob
             if duty:   # v5: a fresh feeding episode ignites a quasar with prob agn_prob; it fades after agn_duty_myr
                 for b in smbh:
@@ -118,11 +125,11 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                     if active[ib] and t >= until[ib]:
                         active[ib] = False; log.append(dict(type="quasar fades", t=t, frame=fr, i=ib, g=int(gid[b]), x=x[b].tolist(), mass=float(m[b])))
                     if fresh[ib] and not active[ib] and er.random() < EP["agn_prob"]:
-                        active[ib] = True; until[ib] = t + duty; log.append(dict(type="quasar ignition", t=t, frame=fr, i=ib, g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {})))
+                        active[ib] = True; until[ib] = t + duty; log.append(dict(type="quasar ignition", t=t, frame=fr, i=ib, g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {}), **(grf(float(m[b])*MASS_UNIT_MSUN) if grf else {})))
                     fresh[ib] = False; on_time[ib] += evk*dt*active[ib]
             for b in ([] if duty else smbh):
                 if kind[b] == SMBH and not active[int(b)] and accreted[int(b)] > 0 and er.random() < EP["agn_prob"]:
-                    active[int(b)] = True; log.append(dict(type="quasar ignition", t=t, frame=fr, i=int(b), g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {})))
+                    active[int(b)] = True; log.append(dict(type="quasar ignition", t=t, frame=fr, i=int(b), g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {}), **(grf(float(m[b])*MASS_UNIT_MSUN) if grf else {})))
         a = acc(); v += .5*dt*a
         if i % every == 0: fx.append(x.copy()); fv.append(v.copy()); fk.append(kind.copy())
     for b in ([] if duty else smbh):   # initial AGN roll for unfed SMBHs (quiescent vs active nuclei)
