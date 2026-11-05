@@ -35,7 +35,7 @@ HEAT_K = 40.         # band climates: thermal performance curves are skewed (hea
 PHOTO_STRESS = .2     # band climates: residual mean-zero photoperiod/light-seasonality gradient (not in band T); keeps geographic niches
 LAT_STRESS = .3       # poles harsher than equator (mean zero over the sphere): local adaptation -> geographic species
 NZ, NL = 6, 12        # equal-area density grid (z bands x lon sectors)
-KEYS = ("id", "parent", "parent2", "birth", "energy", "traits", "gen", "species", "pos", "trail", "logm")
+KEYS = ("id", "parent", "parent2", "birth", "energy", "traits", "gen", "species", "pos", "trail", "logm", "guild")
 # physics15 pass 3: heritable body mass M = exp(logm) (relative; M = 1 is the legacy organism). Kleiber allometry: basal burn and
 # need ~ M^.75, energy store ~ M, offspring cost ~ M, reproduction ~ M^-.25, food reach ~ M^.75 (sqrt in the share weight like need),
 # step ~ M^(1/6) (but moving costs need too), small Bergmann hardiness bonus. Predation: within a density cell, an individual whose
@@ -45,7 +45,12 @@ LOGM_LO, LOGM_HI = -2.5, 2.5
 PRED_GAP, PRED_EFF, PRED_TAKE = .5, .3, .5
 MASS_SPAN = 1.         # logm distance equivalent to a full trait span in species clustering
 BERG_K = .04            # hardiness bonus per unit logm (big bodies buffer cold/drought a little)
+LIFE_K = 140.            # characteristic lifespan (yr) at M=1; age-death ~ M^-0.25 * (1 + age/(LIFE_K M^0.25))
+GUILD_PREF = 1.6        # consumers prefer producer prey by this energy-weight factor
 def mass_of(pop): return np.exp(pop.logm) if len(pop.logm) == len(pop.id) else np.ones(len(pop.id))
+def guild_of(tr, logm):
+    """0 = producer-linked (small/sessile), 1 = consumer-linked (larger or mobile)."""
+    return ((np.asarray(logm) > 0) | (tr[:, MOB] > .55)).astype(int)
 
 UPT0, UPT1, UPT2 = 1.15, 0., .22  # rate-yield: uptake 1.15 - UPT1 x - UPT2 x^2 (x = normalised met); convex -> stable interior optimum (was linear .2 x: bang-bang)
 UPT_REP = 1.          # brood growth ~ uptake (efficiency also slows reproduction, binding even when food is plentiful)
@@ -107,7 +112,7 @@ class Population:
     birth: np.ndarray = field(default_factory=lambda: np.zeros(0)); energy: np.ndarray = field(default_factory=lambda: np.zeros(0))
     traits: np.ndarray = field(default_factory=lambda: np.zeros((0, len(TRAITS)))); gen: np.ndarray = field(default_factory=lambda: np.zeros(0, int))
     species: np.ndarray = field(default_factory=lambda: np.zeros(0, int)); pos: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))
-    recent: dict = field(default_factory=dict); logm: np.ndarray = field(default_factory=lambda: np.zeros(0)); mrng: object = None
+    recent: dict = field(default_factory=dict); logm: np.ndarray = field(default_factory=lambda: np.zeros(0)); guild: np.ndarray = field(default_factory=lambda: np.zeros(0, int)); mrng: object = None
     next_id: int = 0; next_species: int = 0; last_cluster_t: float = -1e18
     T_K: float = None; drift_phase: float = 0.; flip: float = 0.; env_offset: float = 0.
     t: float = 0.; n_births: int = 0; n_deaths: int = 0; n_sexual: int = 0; graveyard: list = field(default_factory=list); n_dead_seen: int = 0
@@ -124,7 +129,8 @@ class Population:
                  age=float(self.t - self.birth[i]), energy=round(float(self.energy[i]), 4), generation=int(self.gen[i]), species_id=int(self.species[i]),
                  lat=round(float(la[0]), 5), lon=round(float(lo[0]), 5),
                  traits={t: round(float(v), 4) for t, v in zip(TRAITS, self.traits[i])}, alive=t_death is None,
-                 mass=round(float(np.exp(self.logm[i])), 4) if len(self.logm) > i else 1.)
+                 mass=round(float(np.exp(self.logm[i])), 4) if len(self.logm) > i else 1.,
+                 guild=int(self.guild[i]) if len(self.guild) > i else 0)
         if t_death is None and len(self.trail) > i:
             tr = self.trail[i]; ok = np.isfinite(tr[:, 0])
             if ok.sum() >= 2:
@@ -177,8 +183,9 @@ def found(LP, rng, n=40, t_w=0., traits=None, climate=None):
     pos = _jitter(np.repeat(site, n, 0), np.full(n, .15), rng)
     pop.mrng = np.random.default_rng([int(abs(site[0, 0])*1e9) % 2**32, int(abs(site[0, 2])*1e9) % 2**32, 15])
     pop.logm = np.clip(P["mass_sd"]*pop.mrng.normal(size=n), LOGM_LO, LOGM_HI) if P["mass_sd"] > 0 else np.zeros(n)
+    g0 = guild_of(tr, pop.logm)
     pop.append(id=_new_ids(pop, n), parent=-np.ones(n, int), parent2=-np.ones(n, int), birth=np.full(n, float(t_w)), energy=np.ones(n), traits=tr,
-               gen=np.zeros(n, int), species=np.zeros(n, int), pos=pos, trail=_new_trail(pos))
+               gen=np.zeros(n, int), species=np.zeros(n, int), pos=pos, trail=_new_trail(pos), guild=g0)
     pop.next_species = 1; pop.t = float(t_w); pop.last_cluster_t = pop.t; pop.drift_phase = float(rng.uniform(0, 2*np.pi))
     pop.series.append(pop.stats()); pop.last_series_t = pop.t
     return pop
@@ -338,6 +345,8 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k, mind=None):
         w = w*M**.375                                                     # food reach ~ M^.75 overall (sqrt(need) already ~ M^.375)
         lp = band_values(climate, pop.pos, "lat_prod")
         if lp is not None: w = w*np.maximum(lp, 1e-3)                    # local productivity (band T, water, light; mean 1)
+        gm = band_values(climate, pop.pos, "lat_growth_mult")
+        if gm is not None: w = w*np.maximum(gm, .05)                     # local Monod nutrient limitation
         got = np.minimum(food*w/w.sum(), 1.5*upt*need*dt) if food > 0 else np.zeros(n)
         stress = local_stress(climate, pop.pos) + off
         torpor = 1 - DORM_STRESS*np.clip(stress - .2, 0, 1)                 # cold/dry torpor lowers basal burn
@@ -351,7 +360,9 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k, mind=None):
         refuge = float(np.clip(n/(REFUGE_N*cap), .2, 1.))                   # few survivors -> sheltered microhabitats
         # stress hazard saturates in excess x (x/(1+2x)): beyond tolerance organisms encyst rather than die linearly faster
         juv = (pop.t - pop.birth < JUV_AGE)*JUV_HAZ*((rep - LO[REP])/SPAN[REP])**2*(1 + 2*max(0., stress.mean() - .3))
-        rate = P["eco_death"]*.5 + sel*.2*refuge*(x := np.maximum(0., stress - hard_eff))/(1 + HAZ_SAT*x) + (.25 if food > 1e-3*cap*dt else .03)*starving + juv
+        age = np.maximum(0., pop.t - pop.birth); life = LIFE_K*M**.25
+        age_mu = .35*(M**-.25)/LIFE_K*(1. + age/np.maximum(life, 1.))   # mild allometric age-death (leaf-scale; full actuarial tables out of scope)
+        rate = P["eco_death"]*.5 + sel*.2*refuge*(x := np.maximum(0., stress - hard_eff))/(1 + HAZ_SAT*x) + (.25 if food > 1e-3*cap*dt else .03)*starving + juv + age_mu
         dead = rng.random(n) < 1 - np.exp(-rate*dt); deaths = int(dead.sum())
         if deaths: _bury(pop, dead, rng, grave_k, pop.t)
         if deaths and acts is not None: acts = tuple(x[~dead] for x in acts)
@@ -376,8 +387,9 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k, mind=None):
             lm = pop.logm[par].copy()
             if len(sex): lm[sex] = .5*(pop.logm[par[sex]] + pop.logm[m2])
             if P["mass_sd"] > 0: lm = np.clip(lm + P["mass_sd"]*P["evolution_rate"]*.25*pop.mrng.normal(size=births), LOGM_LO, LOGM_HI)
+            gld = guild_of(ct, lm)
             pop.append(id=_new_ids(pop, births), parent=pop.id[par], parent2=par2, birth=np.full(births, pop.t), energy=np.full(births, .5)*cost[par],
-                       traits=ct, gen=g + 1, logm=lm,
+                       traits=ct, gen=g + 1, logm=lm, guild=gld,
                        species=pop.species[par].copy(), pos=(cp := _jitter(pop.pos[par], np.full(births, .02), rng)), trail=np.concatenate([pop.trail[par][:, 1:], cp[:, None]], 1))
         if len(pop) > cap:                                                 # soft cap: cull weakest (lowest energy/need)
             need = need_of(pop.traits)*mass_of(pop)**.75
@@ -388,12 +400,12 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k, mind=None):
     return births, deaths
 
 def predation(pop, P, dt):
-    """Soft-capped size-structured predation inside equal-area density cells (same grid as local_density): each prey-capable
-    individual (some cell-mate heavier by > PRED_GAP in logm) loses a fraction 1 - exp(-pred_rate dt) x PRED_TAKE of its energy;
-    the cell's predators share PRED_EFF of it in proportion to M^.75. Energy only moves (assimilation < 1), so it can't run away."""
+    """Size-structured + guild-linked predation inside equal-area density cells.
+    Consumers (guild=1) prefer producer-linked prey (guild=0) by GUILD_PREF; mass-gap PRED_GAP still required."""
     n = len(pop); y = np.clip(pop.pos[:, 1], -1, 1); lon = np.arctan2(pop.pos[:, 2], pop.pos[:, 0])
     cell = (np.clip(((y + 1)*4).astype(int), 0, 7))*16 + np.clip(((lon + np.pi)/(2*np.pi)*16).astype(int), 0, 15)
     frac = (1 - np.exp(-P["pred_rate"]*dt))*PRED_TAKE; M34 = np.exp(.75*pop.logm)
+    g = pop.guild if len(pop.guild) == n else np.zeros(n, int)
     for c in np.unique(cell):
         idx = np.flatnonzero(cell == c)
         if len(idx) < 2: continue
@@ -401,5 +413,10 @@ def predation(pop, P, dt):
         prey = idx[lm < big - PRED_GAP]
         if not len(prey): continue
         pred = idx[lm >= lm[lm < big - PRED_GAP].min() + PRED_GAP]
-        take = frac*pop.energy[prey]; pop.energy[prey] -= take
-        wv = M34[pred]; pop.energy[pred] = np.minimum(pop.energy[pred] + PRED_EFF*take.sum()*wv/wv.sum(), E_MAX*np.exp(pop.logm[pred]))
+        pref = np.ones(len(prey))
+        for j, pj in enumerate(prey):
+            if g[pj] == 0 and np.any(g[pred] == 1): pref[j] = GUILD_PREF
+            elif g[pj] == 1 and np.any(g[pred] == 0): pref[j] = 1.0/GUILD_PREF
+        take = np.minimum(frac*pref*pop.energy[prey], pop.energy[prey]); pop.energy[prey] -= take
+        wv = M34[pred]*(1. + .5*(g[pred] == 1))
+        pop.energy[pred] = np.minimum(pop.energy[pred] + PRED_EFF*take.sum()*wv/max(wv.sum(), 1e-12), E_MAX*np.exp(pop.logm[pred]))

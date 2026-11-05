@@ -68,6 +68,7 @@ class HabitatRun:
             cu0 = self.cu; fint = cu0.energy_mix.get("fossil", 0.)*(1 - .5*cu0.mitigation) if (self.culture and cu0.active) else 0.
             clim.stressors.update(self.carbon.step(self.lat, P, dt, float(cu0.level) if self.culture else 0., fint))
         else: clim = world.step(h, hw, P, dt, stress)
+        if self.bgc is not None: clim.stressors.update(self.bgc.band_stressors())  # prior-step per-band N/P/Monod for bio + individuals
         self.hist.push(t, clim)
         if stress["impact_dT"] and self.lat is None:      # impact winter freezes water briefly: the shock is the kill, chronic stress uses pre-impact water
             clim.stressors["water_chronic"] = world.step(h, hw, P, dt, dict(stress, dT=stress["dT"] - stress["impact_dT"])).liquid_water_frac

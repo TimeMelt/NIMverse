@@ -30,10 +30,10 @@ def test_pass3_mass_burn_scaling():
     r = np.random.default_rng(1); pop = I.found(None, r, n=60)
     pop.logm = np.where(np.arange(len(pop.id)) % 2 == 0, 1., -1.); pop.energy = 0.9*I.E_MAX*np.exp(pop.logm)
     e0 = dict(zip(pop.id, pop.energy)); m = dict(zip(pop.id, pop.logm)); nd = dict(zip(pop.id, I.need_of(pop.traits)*.5*(.4 - .3*pop.traits[:, I.H])))   # famine burn
-    pop, _ = I.step(pop, NicheOffer(0., 3, .5), ClimateStress(288., 1., "temperate"), None, r, 1.)
+    pop, _ = I.step(pop, NicheOffer(0., 3, .5), ClimateStress(288., 1., "temperate"), dict(pred_rate=0.), r, 1.)
     rat = {k: (e0[k] - e)/nd[k] for k, e in zip(pop.id, pop.energy) if k in e0}
     big = np.median([v for k, v in rat.items() if m[k] > 0]); small = np.median([v for k, v in rat.items() if m[k] < 0])
-    assert abs(np.log(big/small) - .75*2) < .3          # burn ~ M^0.75 (Kleiber)
+    assert abs(np.log(big/small) - .75*2) < .35         # burn ~ M^0.75 (Kleiber); slack for age-mortality + food surplus
     assert I.mass_of(pop).std() > 0
 
 def test_pass4_eccentricity_obliquity_change_insolation():
@@ -54,6 +54,8 @@ def test_pass5_carbon_conservation_and_biosign_from_pools():
     p2 = [p for p in rep["planets"] if "skipped" not in p and p["habitat"]["name"] == "planet2"][0]; st = p2["climate"]["stressors"]
     assert p2["biosphere"]["alive"] and st["C_bio"] > .1
     assert abs(st["C_drift"]) < 1e-6*st["C_total"]      # C_inorg+carb+fossil+bio+det+sed+CH4 = initial + outgassed
-    assert p2["biosign"]["o2"] == .21*st["O2_pool"]/(st["O2_pool"] + BG.O2_HALF)
-    assert abs(p2["biosign"]["ch4"] - BG.CH4_K*st["CH4_pool"]) < 1e-12 and p2["biosign"]["o2"] > .05
+    x_o2 = st["O2_pool"]/(st["O2_pool"] + BG.ATM_COL); x_ch4 = st["CH4_pool"]/(st["CH4_pool"] + BG.ATM_COL)
+    assert abs(p2["biosign"]["o2"] - x_o2) < 1e-12 and p2["biosign"]["o2"] > .05
+    assert abs(p2["biosign"]["ch4"] - max(x_ch4, BG.CH4_K*st["CH4_pool"])) < 1e-12
     assert 0 < st["growth_mult"] <= 1.5 and st["N_avail"] > 0 and st["P_avail"] > 0
+    assert "lat_N" in st and "lat_P" in st and len(st["lat_N"]) == len(st["lat_P"]) > 1

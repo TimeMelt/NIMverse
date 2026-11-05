@@ -27,15 +27,15 @@ LIFE_SPACE = {
     # culture v3: fossil share of energy mix, K cooling per unit aerosol, acidification gain, chem outgassing, mitigation rate, conflict gain
     "tech_fossil_frac": (0., 1.), "tech_aerosol_K": (0., 30.), "tech_acid": (0., 5.), "tech_chem": (0., 10.),
     "tech_mitigate": (0., .01), "tech_conflict": (0., 2.),
-    # physics15: latitudinal climate diffusion (W m^-2 K^-1), K per CO2 doubling, carbon-cycle time compression (1 = real
-    # ~0.5 Myr inorganic-carbon timescale), soft individual predation rate (1/yr), heritable log-mass mutation sd
+    # physics15/physics_real: lat EBM diffusion, K per CO2 doubling, carbon-cycle time compression (default 5; 1 = real
+    # ~0.5 Myr inorganic timescale; prefer 1-5 over the old x20), soft predation rate, heritable log-mass mutation sd
     "lat_diffusion": (.1, 3.), "co2_sens_K": (1., 8.), "carbon_rate": (0., 200.), "pred_rate": (0., .3), "mass_sd": (0., .5),
 }
 LIFE_DEFAULTS = {k: (lo+hi)/2 for k, (lo, hi) in LIFE_SPACE.items()}
 LIFE_DEFAULTS.update(greenhouse_K=33., albedo_mult=1., abio_p=4e-4, snowball_K=238., organic_thresh=.18, flare_rate_mult=1., flare_amp=2., stellar_age_Gyr=4.6, stellar_evolve=0., stellar_age_rate=1., impact_scale=1., impact_kill=.5, tech_rate=1e-3, tech_threshold=.5, tech_draw=.001, tech_pollute=.1, tech_warm_K=5., tech_fossil_frac=.7, tech_aerosol_K=2., tech_acid=1., tech_chem=.1, tech_mitigate=2e-4, tech_conflict=1.,
                      evolution_rate=1., pop_cap=300., sel_strength=1., speciation_dist=.4,
                      sex_rate=.3, climate_drift=.5, impact_refuge=.05,
-                     lat_diffusion=.3, co2_sens_K=4., carbon_rate=20., pred_rate=.03, mass_sd=.2)
+                     lat_diffusion=.3, co2_sens_K=4., carbon_rate=5., pred_rate=.03, mass_sd=.2)
 TRAITS = ("metabolism_eff", "mobility", "reproduction_rate", "hardiness")
 
 def clamp(k, v):

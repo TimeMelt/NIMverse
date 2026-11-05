@@ -78,13 +78,19 @@ SIGMA = 5.670e-8; S_SUN = 1361.          # W m^-2 K^-4; W m^-2 at 1 AU from 1 Ls
 N_BANDS = 24                              # equal-area bands (uniform in x = sin latitude)
 C_MIX, C_LAND, C_DEEP, GAMMA = 10., 1., 100., .7   # W yr m^-2 K^-1 (mixed layer ~80 m, land, deep ocean); W m^-2 K^-1 exchange
 ALB_ICE, T_ICE, ICE_W = .6, 265., 2.5     # ice albedo; ice where (T + .3 x seasonal amp) < T_ICE (smooth, K)
-ALB_WARM_K = .95                          # ice-free surface albedo = .95 x v1 bond albedo (calibrated: Earth analogue -> 289 K mean, 304 K equator, 262 K poles)
+ALB_WARM_K = .93                          # ice-free surface albedo = .95 x v1 bond albedo (calibrated: Earth analogue -> 289 K mean, 304 K equator, 262 K poles)
 ALB_P2 = .15                              # zenith-angle/cloud albedo rise toward the poles: + ALB_P2 x P2(sin lat) (area-mean zero)
 S2X0 = 4.                                 # K per CO2 doubling (default co2_sens_K knob)
 WV_K, WV_CAP = 2., 120.                   # water-vapour feedback K x (e_s(T)/e_s(288) - 1), capped
 P_REF = 2.8e-4                            # bar CO2 at which greenhouse_K applies (pre-industrial Earth)
 WV_SAT = 10.                              # water-vapour feedback saturation (es ratio - 1 scale)
 H_MAX = 2.                                # yr implicit substep
+CLOUD_ALB = .18                           # cloud albedo contribution at f_cloud=1 (added into (1-alb))
+CLOUD_G = 6.0                             # K IR greenhouse from area-mean cloud at f=1
+CLOUD_WET, CLOUD_COLD = .55, .55          # wet/cold weights in cloud fraction
+DESERT_ALB = .08                          # extra dry-soil / desert brightening
+DRY_WV = .35                              # WV feedback floor at ocean=0
+D_SIZE = .4                               # lat_diffusion scales (R/R_earth)^D_SIZE; R~m^(1/3)
 
 def es_ratio(T): return float(np.exp(5420.*(1/288. - 1/max(T, 150.))))   # Clausius-Clapeyron saturation vapour pressure / e_s(288 K)
 
@@ -92,16 +98,20 @@ def band_x(n=N_BANDS): return (np.arange(n) + .5)*2./n - 1.
 
 def band_of(sinlat, n=N_BANDS): return np.clip(((np.asarray(sinlat) + 1)/2*n).astype(int), 0, n-1)
 
-def greenhouse(h, P, pCO2, T_mean):
-    """Total greenhouse offset G (K): v1 baseline greenhouse_K at P_REF (scaled by volatiles) + co2 log forcing + water-vapour feedback."""
+def greenhouse(h, P, pCO2, T_mean, ocean=None, cloud_f=0.):
+    """Total greenhouse offset G (K): v1 baseline + log-CO2 + saturating WV (dry worlds muted) + cloud IR."""
     fv = min(1., h.volatiles/.5); g0 = P["greenhouse_K"]*fv
     g_co2 = P["co2_sens_K"]*np.log2(max(pCO2, 1e-7)/P_REF)
-    x = max(0., es_ratio(T_mean) - 1.); g_wv = min(WV_CAP, WV_K*fv*x/(1 + x/WV_SAT))   # saturating (band-saturated H2O lines)
-    return float(max(0., g0 + g_co2 + g_wv)), float(g_co2), float(g_wv)
+    oc = fv if ocean is None else float(np.clip(ocean, 0, 1))
+    wv_scale = fv*(DRY_WV + (1 - DRY_WV)*oc)
+    x = max(0., es_ratio(T_mean) - 1.); g_wv = min(WV_CAP, WV_K*wv_scale*x/(1 + x/WV_SAT))
+    g_cl = CLOUD_G*float(np.clip(cloud_f, 0, 1))*fv
+    return float(max(0., g0 + g_co2 + g_wv + g_cl)), float(g_co2), float(g_wv), float(g_cl)
+
 
 class LatClimate:
     """Latitudinal EBM (North/Budyko-Sellers style) with diffusion in x = sin(lat), two-layer heat capacity (mixed layer +
-    deep ocean), ice-albedo feedback and seasonal amplitude from the orbit geometry.  Per band i:
+    deep ocean), ice-albedo feedback, humidity/T cloud fraction (albedo + IR), and seasonal amplitude from the orbit geometry.  Per band i:
         C_s dT/dt = S0 q_i (1 - alpha_i) - sigma (T_i - G)^4 + F + gamma (Td_i - T_i) + D d/dx[(1 - x^2) dT/dx]
         C_d dTd/dt = gamma (T_i - Td_i)
     Emission temperature T - G (greenhouse offset) reproduces the v1 box exactly for a uniform, ice-free planet.
@@ -114,9 +124,11 @@ class LatClimate:
         xe = np.linspace(-1, 1, n + 1); self.w_edge = 1 - xe**2; self.dx = 2./n
         self.ocean = float(np.clip(h.volatiles, 0, 1)) if h.ptype in ("ocean", "terran", "ice") else float(np.clip(.5*h.volatiles, 0, 1))
         self.C_s = C_MIX*self.ocean + C_LAND*(1 - self.ocean); self.C_d = C_DEEP*self.ocean + 2.
-        self.D = float(np.clip(P["lat_diffusion"]/max(h.spin, .3)**.5, .05, 5.))
+        Rrel = float(np.clip((h.m/3e-6)**(1./3.), .3, 4.))
+        self.D = float(np.clip(P["lat_diffusion"]*Rrel**D_SIZE/max(h.spin, .3)**.5, .05, 5.))
         A = float(np.clip(ALBEDO[h.ptype]*P["albedo_mult"], 0, .95))
         self.alb_w = A if h.ptype in ("ice", "lava", "gas giant", "ice giant") else ALB_WARM_K*A
+        if h.ptype == "desert": self.alb_w = float(np.clip(self.alb_w + DESERT_ALB, .02, .9))
         self.alb_w = np.clip(self.alb_w + ALB_P2*(1.5*self.x**2 - .5)*(h.ptype not in ("lava",)), .02, .9)
         self.alb_ice = np.maximum(self.alb_w, ALB_ICE) if h.ptype not in ("lava",) else self.alb_w
         self.pCO2 = P_REF; self.t = 0.; self.T = None; self.Td = None; self.G = 0.; self.last = {}; self.tech_co2_mult = 1.
@@ -137,18 +149,27 @@ class LatClimate:
         om = 2*np.pi; a_oc = Q/np.sqrt(B**2 + (C_MIX*om)**2); a_ld = Q/np.sqrt(B**2 + (.3*om)**2)
         return self.ocean*a_oc + (1 - self.ocean)*a_ld
     def ice(self, T, amp): return 1/(1 + np.exp((T + .3*amp - T_ICE)/ICE_W))
+    def cloud_frac(self, T, ice):
+        """Band cloud fraction higher over wet cold bands; clear on dry/lava worlds."""
+        if self.ocean < 1e-3: return np.zeros_like(T)
+        wet = self.ocean*(1 - .85*ice)
+        cold = np.clip((295. - T)/45., 0., 1.5)
+        f = wet*(CLOUD_WET*.4 + CLOUD_COLD*cold/(1. + .25*es_ratio(float(np.mean(T)))))
+        return np.clip(f, 0., .85)
     def integrate(self, h, hw, P, dt, F=0., deep_eq=False):
-        """Backward-Euler substeps (<= H_MAX yr) with linearised OLR; deep layer explicit (or held at equilibrium for spin-up)."""
+        """Backward-Euler substeps (at most H_MAX yr) with linearised OLR; deep layer explicit (or held at equilibrium for spin-up)."""
         S0 = self.S0(h, hw); ins = insolation(self.x, self.orb["obliquity"], self.orb["e"], self.orb["varpi"])
         k = max(1, int(np.ceil(dt/H_MAX))); hh = dt/k; n = self.n; De = self.D*self.w_edge/self.dx**2
         Lap = np.zeros((n, n))
         for i in range(n):
             if i > 0: Lap[i, i-1] += De[i]; Lap[i, i] -= De[i]
             if i < n-1: Lap[i, i+1] += De[i+1]; Lap[i, i] -= De[i+1]
+        gco2 = gwv = gcl = 0.
         for _ in range(k):
-            self.G, gco2, gwv = greenhouse(h, P, self.pCO2*self.tech_co2_mult, float(self.T.mean()))
-            amp = self.season_amp(ins, S0); ice = self.ice(self.T, amp)
+            amp = self.season_amp(ins, S0); ice = self.ice(self.T, amp); cf = self.cloud_frac(self.T, ice)
+            self.G, gco2, gwv, gcl = greenhouse(h, P, self.pCO2*self.tech_co2_mult, float(self.T.mean()), self.ocean, float(cf.mean()))
             alb = self.alb_w + (self.alb_ice - self.alb_w)*ice
+            alb = alb + CLOUD_ALB*cf*(1 - alb)
             Te = np.maximum(self.T - self.G, 20.); olr = SIGMA*Te**4; B = 4*SIGMA*Te**3
             asr = S0*ins["mean"]*(1 - alb)
             if deep_eq: self.Td = self.T.copy()
@@ -156,9 +177,10 @@ class LatClimate:
             rhs = self.C_s/hh*self.T + asr - olr + B*self.T + F + GAMMA*self.Td
             self.T = np.linalg.solve(M, rhs)
             if not deep_eq: self.Td = self.Td + hh*GAMMA*(self.T - self.Td)/self.C_d
-        amp = self.season_amp(ins, S0); ice = self.ice(self.T, amp)
-        self.last = dict(ins=ins, amp=amp, ice=ice, S0=S0, asr=float((S0*ins["mean"]*(1 - (self.alb_w + (self.alb_ice - self.alb_w)*ice))).mean()),
-                         g_co2=gco2, g_wv=gwv)
+        amp = self.season_amp(ins, S0); ice = self.ice(self.T, amp); cf = self.cloud_frac(self.T, ice)
+        alb = self.alb_w + (self.alb_ice - self.alb_w)*ice; alb = alb + CLOUD_ALB*cf*(1 - alb)
+        self.last = dict(ins=ins, amp=amp, ice=ice, cloud=cf, S0=S0, asr=float((S0*ins["mean"]*(1 - alb)).mean()),
+                         g_co2=gco2, g_wv=gwv, g_cloud=gcl, cloud_mean=float(cf.mean()))
         return self.T
     def step(self, h, hw, LP=None, dt_w_yr=1., stress=None, t=None):
         """Integrate dt, return a ClimateStress compatible with world.step plus per-band fields in stressors."""
@@ -186,8 +208,12 @@ class LatClimate:
                   lat_prod=[round(float(v/pm), 4) if pm > 0 else 0. for v in prod], lat_ice=[round(float(v), 4) for v in ice],
                   lat_season_K=[round(float(v), 3) for v in amp], lat_insol=[round(float(v), 5) for v in ins],
                   T_eq_lat=float(T[self.n//2 - 1:self.n//2 + 1].mean()), T_pole=float(.5*(T[0] + T[-1])), ice_frac=ice_f, ice_lat_deg=iceline,
+                  lat_cloud=[round(float(v), 4) for v in self.last.get("cloud", np.zeros(self.n))],
                   greenhouse_total_K=float(self.G), greenhouse_co2_K=float(self.last.get("g_co2", 0.)), greenhouse_wv_K=float(self.last.get("g_wv", 0.)),
-                  pCO2_bar=float(self.pCO2*self.tech_co2_mult), pCO2_geo_bar=float(self.pCO2), T_deep=float(self.Td.mean()), ecc=float(self.orb["e"]), obliquity_deg=float(np.degrees(self.orb["obliquity"])),
+                  greenhouse_cloud_K=float(self.last.get("g_cloud", 0.)), cloud_frac=float(self.last.get("cloud_mean", 0.)),
+                  pCO2_bar=float(self.pCO2*self.tech_co2_mult), pCO2_geo_bar=float(self.pCO2), T_deep=float(self.Td.mean()),
+                  T_deep_bands=[round(float(v), 3) for v in self.Td],
+                  ecc=float(self.orb["e"]), obliquity_deg=float(np.degrees(self.orb["obliquity"])),
                   varpi_deg=float(np.degrees(self.orb["varpi"]) % 360.), insol_mean=float(self.last["S0"]*ins.mean()), climate_model="lat_ebm")
         if dT_imp: st["water_chronic"] = float(w_c.mean()); st["lat_water_chronic"] = [round(float(v), 4) for v in w_c]
         if getattr(hw, "hz_in_now", 0.) > 0:
