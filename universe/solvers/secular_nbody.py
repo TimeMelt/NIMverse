@@ -454,7 +454,7 @@ def tide_kw(mode):
 
 
 def drivers_from_system(S, habs, seed, solver="secular", **kw):
-    """{planet_id: driver} like leaves.orbit_climate.drivers_from_system, for solver in {"nbody", "secular", "off"}."""
+    """{planet_id: driver} like leaves.orbit_climate.drivers_from_system, for solver in {"nbody", "secular", "rebound", "off"}."""
     kind = np.asarray(S["kind"]); Ms = float(np.asarray(S["m"])[kind == 0].sum())
     ids = [h.planet_id for h in habs]
     if solver == "off": return {h.planet_id: FixedOrbit(h.e, h.tilt) for h in habs}
@@ -466,7 +466,10 @@ def drivers_from_system(S, habs, seed, solver="secular", **kw):
         return NBodySystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
     kw.pop("moon_bodies", None); kw.pop("horizon", None)
     if solver == "secular": return SecularSystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
-    raise ValueError(f"orbit_solver must be nbody|secular|off, got {solver!r}")
+    if solver in ("rebound", "rb"):
+        from .ext import rebound_orbit
+        return rebound_orbit.drivers_from_system(S, habs, seed, **kw)
+    raise ValueError(f"orbit_solver must be nbody|secular|rebound|off, got {solver!r}")
 
 
 def system_moons(S, habs):

@@ -239,10 +239,20 @@ class _Api:
     def mass(self, M, age_Gyr): return mass(M, age_Gyr, self.Z, self.mode)
 
 def api(mode="semi", Z=None):
-    """Module itself for the legacy ("semi", solar) path (bit-identical); otherwise an _Api bound to (mode, Z)."""
+    """Module itself for the legacy ("semi", solar) path (bit-identical); otherwise an _Api bound to (mode, Z).
+    mode mist|mesa routes to universe.solvers.ext (MIST tracks / optional real MESA)."""
     import sys
+    Zeff = ZSUN if Z is None or Z < 0 else float(Z)
+    if mode in ("mist", "MIST"):
+        from .ext import mist_tracks; return mist_tracks.api(Zeff)
+    if mode in ("mesa", "MESA"):
+        from .ext import mesa_runner
+        if not mesa_runner.available():
+            from .ext import UnavailableError
+            raise UnavailableError("MESA not available (set MESA_DIR); use mist or mesa_lite")
+        return mesa_runner.api(Zeff)
     if mode in ("semi", True) and (Z is None or Z < 0 or Z == ZSUN): return sys.modules[__name__]
-    return _Api("mesa_lite" if mode in ("mesa_lite", "mesa-lite", "ml") else "semi", ZSUN if Z is None or Z < 0 else Z)
+    return _Api("mesa_lite" if mode in ("mesa_lite", "mesa-lite", "ml") else "semi", Zeff)
 
 
 # ================================================================ mode="mesa_lite"

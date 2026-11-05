@@ -23,7 +23,7 @@ def host_weather(S, distance_pc=None, M_override=None, seed=None):
     return hw
 
 def apply_stellar_solver(hw, sv):
-    """solvers["stellar_solver"] (True/"semi" | "mesa_lite") + optional solvers["stellar_Z"] -> hw.solver_track / Z_star."""
+    """solvers["stellar_solver"] (True/"semi"|"mesa_lite"|"mist"|"mesa") + optional solvers["stellar_Z"] -> hw.solver_track / Z_star."""
     m = sv.get("stellar_solver")
     if not m: return
     hw.solver_track = m if isinstance(m, str) else "semi"
@@ -58,6 +58,14 @@ class HabitatRun:
         elif climate_model == "gcm2d":  # solvers.climate2d: lat x lon EBM-GCM (+ two-stream RT if sv["rt"]) + land-cell weathering
             from ..solvers import climate2d
             self.lat, self.carbon = climate2d.init_gcm2d(h, self.hw, P, orbit, rt_on=bool(sv.get("rt")), physics=sv.get("gcm_physics") or (), buffer=sv.get("rt_buffer")); self.bgc = biogeochem.Biogeochem(self.carbon)
+        elif climate_model in ("climate_table", "exoplasim"):
+            from ..solvers.ext import exoplasim_climate
+            if climate_model == "exoplasim" and not sv.get("climate_table"):
+                # live ExoPlaSim binary (raises UnavailableError if Fortran core missing)
+                exoplasim_climate.run_exoplasim()  # raises; HabitatRun construction fails clearly
+            path = sv.get("climate_table")
+            self.lat, self.carbon = exoplasim_climate.init_table_climate(h, self.hw, P, orbit, path=path)
+            self.bgc = biogeochem.Biogeochem(self.carbon, n_bands=int(self.lat.n))
         if sv.get("foodweb"):
             from ..solvers import foodweb; self.fw = foodweb.make(sv["foodweb"], seed=int(abs(h.a)*1e6) + 7*int(getattr(h, "planet_id", 0)))
         self.hist = world.ClimateHistory(n=4000); self.cu = culture_mod.Culture(); self.tstress = {}; self.peak = {}; self.n_imp = 0; self.impact_loss = 0.; self.k = 0
@@ -174,6 +182,11 @@ class HabitatRun:
         if self.climate_model == "gcm2d" and self.lat is not None:
             L = self.lat.last; d["gcm2d"] = dict(toa_imbalance=float(L.get("toa_imbalance", 0.)), rt=bool(self.lat.rt), co2_limit_cycle=bool(self.lat.limit_cycle),
                                                 pCO2_bar=float(self.lat.pCO2), x_o2=float(self.lat.x_o2), x_ch4=float(self.lat.x_ch4))
+        if self.climate_model in ("climate_table", "exoplasim") and self.lat is not None:
+            L = getattr(self.lat, "last", {}) or {}
+            d["climate_table"] = dict(toa_imbalance=float(L.get("toa_imbalance", 0.)),
+                                     source=L.get("climate_table", self.solvers.get("climate_table")),
+                                     pCO2_bar=float(getattr(self.lat, "pCO2", 0.)))
         if self.hw.solver_track:
             d["stellar"] = dict(track=self.hw.solver_track, phase=self.hw.phase, age_Gyr=float(self.hw.age_Gyr), L=float(self.hw.L_star), T_eff=float(self.hw.T_eff))
             if self.hw.solver_track == "mesa_lite":
@@ -181,6 +194,10 @@ class HabitatRun:
                 Zs = _st.ZSUN if self.hw.Z_star < 0 else self.hw.Z_star; tk = _st.solve_track_ml(self.hw.M_star, Zs)
                 d["stellar"].update(Z=Zs, t_pms_Myr=tk["t_pms"]*1e3, t_ms_Gyr=tk["t_ms"], he_flash=tk["he_flash"], t_hb_Gyr=tk["t_hb"], C_O_final=tk["C_O"],
                                     carbon_star=tk["carbon_star"], M_wd=tk["M_wd"], t_cryst_Gyr=tk["t_cryst"])
+            elif self.hw.solver_track == "mist":
+                from ..solvers.ext import mist_tracks as _mt
+                Zs = _mt.ZSUN if self.hw.Z_star < 0 else self.hw.Z_star; tk = _mt.solve_track(self.hw.M_star, Zs)
+                d["stellar"].update(Z=Zs, mist_source=tk.get("mist_source"), t_ms_Gyr=tk["t_ms"], t_pms_Gyr=tk["t_pms"])
         return d
 
     def report(self):
@@ -198,7 +215,7 @@ class HabitatRun:
                     creatures=pkt.to_dict() if pkt else None, organism_model=model,
                     individuals=(evo or {}).get("individuals"), evolution=({k: v for k, v in evo.items() if k != "individuals"} if evo else None), biomass_series=[float(x) for x in series[::max(1, len(series)//50)]],
                     score=dict(eco_stability=ScoreBus.eco_stability(series), planted_life=ScoreBus.planted_life(self.bio.alive)),
-                    **({"solvers": self.solver_report()} if (self.solvers or self.climate_model == "gcm2d") else {}),
+                    **({"solvers": self.solver_report()} if (self.solvers or self.climate_model in ("gcm2d", "climate_table", "exoplasim")) else {}),
                     **({"mind": self.mind.summary()} if getattr(self.mind, "active", False) else {}))
 
 def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
@@ -220,7 +237,7 @@ def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, cultu
               emit_every=None, M_override=None, record=None, model="individuals", mind=None, climate_model="lat", secular=True, solvers=None):
     """climate_model="lat" (physics15 default): latitudinal EBM + carbon cycle (+ secular orbit drivers if `secular`); "box": v1 0-D;
     "gcm2d": universe.solvers.climate2d lat x lon EBM-GCM.  solvers (opt-in, universe.solvers): dict(rt=bool, foodweb=bool,
-    stellar_solver=bool|"semi"|"mesa_lite", orbit_solver="nbody"|"secular"|"off"|None) -- None/{} keeps the leaf defaults bit-for-bit."""
+    stellar_solver=bool|"semi"|"mesa_lite"|"mist"|"mesa", orbit_solver="nbody"|"secular"|"rebound"|"off"|None) -- None/{} keeps the leaf defaults bit-for-bit."""
     P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override, seed=seed)
     cat = ObserverCatalog(observers or [Observer("obs0", hw.distance_pc)])
     ee = emit_every or max(1, int(years/dt)//400)
@@ -228,11 +245,11 @@ def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, cultu
     from .orbit_climate import drivers_from_system
     sv = dict(solvers or {}); osv = sv.get("orbit_solver")
     apply_stellar_solver(hw, sv)
-    if osv and climate_model in ("lat", "gcm2d"):
+    if osv and climate_model in ("lat", "gcm2d", "climate_table", "exoplasim"):
         from ..solvers import secular_nbody; okw = secular_nbody.tide_kw(sv.get("orbit_tides"))
         if sv.get("nbody_kyr") and osv == "nbody": okw["horizon"] = 1e3*float(sv["nbody_kyr"])
         orbs = secular_nbody.drivers_from_system(S, habs, seed, osv, **okw)
-    else: orbs = drivers_from_system(S, habs, seed) if (secular and climate_model in ("lat", "gcm2d")) else {}
+    else: orbs = drivers_from_system(S, habs, seed) if (secular and climate_model in ("lat", "gcm2d", "climate_table", "exoplasim")) else {}
     orb_info = None
     if osv == "nbody" and orbs and sv.get("megno_kyr"):
         nb = next(iter(orbs.values())).sys; orb_info = dict(megno=nb.megno(1e3*float(sv["megno_kyr"])), megno_kyr=float(sv["megno_kyr"]), horizon_kyr=nb.horizon/1e3)

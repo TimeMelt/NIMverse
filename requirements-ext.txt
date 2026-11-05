@@ -1,0 +1,13 @@
+# Optional external science stacks used by universe.solvers.ext (installed in nimenv on this box).
+# Core universe does not require these; defaults stay bit-identical without them.
+rebound==5.2.2
+lalsuite==8.0.0
+# lalsimulation ships with lalsuite (here 7.0.0); PhenomD / PhenomXPHM
+exoplasim==3.4.2          # Python shell only here; Fortran core needs gfortran + rebuild
+mistery==0.0.3            # MIST track fetcher (network; ZIPs often 404 from this box)
+isochrones==2.1           # MIST interpolator (network)
+# Optional readers for offline products (not required for npz/csv paths):
+# netCDF4
+# h5py
+# Real MESA: set MESA_DIR to a working install with `./star` (cannot compile here: no gfortran/cmake).
+# ROCKE-3D / SpEC / Einstein Toolkit: produce NetCDF/npz/HDF5 offline; load via --climate-table / --nr-waveform / --rt-table.

@@ -266,9 +266,15 @@ def imr_tags(m1_msun, m2_msun, chi1=0., chi2=0., order=3.5, f_lo_hz=10.):
     ph = {k: float((a*nu*nu + b*nu + c)/tM) for k, (a, b, c) in _PHENOM_A.items()}
     cyc = pn_cycles(f_lo_hz, m1_msun, m2_msun, order, ph["f_merg"]) if f_lo_hz < ph["f_merg"] else dict(t_s=0., n_cycles=0.)
     rd = ringdown_fields(m1_msun, m2_msun, chi1, chi2)
-    return dict(gr_imr_model="PhenomA-tags", gr_imr_f_merge_hz=ph["f_merg"], gr_imr_f_ring_hz=ph["f_ring"],
+    base = dict(gr_imr_model="PhenomA-tags", gr_imr_f_merge_hz=ph["f_merg"], gr_imr_f_ring_hz=ph["f_ring"],
                 gr_imr_sigma_hz=ph["sigma"], gr_imr_f_cut_hz=ph["f_cut"], gr_imr_f_qnm_hz=rd["gr_ringdown_f_hz"],
                 gr_imr_t_inband_s=cyc["t_s"], gr_imr_cycles_inband=cyc["n_cycles"], gr_imr_f_lo_hz=float(f_lo_hz), gr_pn_order=float(order))
+    # Opt-in LALSuite Phenom tags (additive; PhenomA bands preserved). Failures fall back to PhenomA-only.
+    try:
+        from .ext.lal_wave import enrich_imr_tags
+        return enrich_imr_tags(base, m1_msun, m2_msun, chi1, chi2, f_lo_hz=f_lo_hz)
+    except Exception:
+        return base
 
 
 # ----------------------------------------------------------------- MPD spinning test body (Schwarzschild, opt-in)

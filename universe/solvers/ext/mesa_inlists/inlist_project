@@ -1,0 +1,17 @@
+! Minimal MESA star inlist template for universe.solvers.ext.mesa_runner
+! Placeholders @MASS@ @Z@ @MAX_AGE@ are substituted at run time.
+&star_job
+  create_pre_main_sequence_model = .true.
+  save_model_when_terminate = .false.
+/ ! end of star_job
+
+&controls
+  initial_mass = @MASS@
+  initial_z = @Z@
+  max_age = @MAX_AGE@
+  history_interval = 1
+  write_profiles_flag = .false.
+/ ! end of controls
+
+&pgstar
+/ ! end of pgstar
