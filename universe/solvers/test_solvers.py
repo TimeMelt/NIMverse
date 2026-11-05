@@ -39,7 +39,7 @@ def test_rt_cia_co2_condensation_runaway():
 def test_gcm2d_physics_conservative_and_default():
     h = hab(1.); g0, _ = climate2d.init_gcm2d(h, SUN, None, None, rt_on=False)
     g, _ = climate2d.init_gcm2d(h, SUN, None, None, rt_on=False, physics="all")
-    assert g0.physics == frozenset() and g.physics == frozenset(climate2d.GCM_PHYSICS)
+    assert g0.physics == frozenset() and g.physics == frozenset(climate2d.GCM_PHYSICS[:3])     # "all" = the original three
     A = g._winds(g.Tg.ravel() if hasattr(g, "Tg") else np.full(g.N, 280.))
     assert np.abs(np.asarray(A.sum(1))).max() < 1e-9 and np.abs(np.asarray(A.sum(0))).max() < 1e-9   # upwind: conservative
     assert abs(np.degrees(g.phi_H) - 29.) < 2.                                                  # Held-Hou edge, Earth
@@ -246,3 +246,91 @@ def test_live_checkpoint_restore_with_solvers():
     s.loop(max_years=120); n = s.seq; ref = json.dumps({x["seq"]: x for x in s.hist}[n], sort_keys=True, default=str)
     s.restore(2); s.paused = False; s.done = False; s.loop(max_years=120)
     assert json.dumps({x["seq"]: x for x in s.hist}[n], sort_keys=True, default=str) == ref
+
+
+# ---- full-fidelity leftovers (all opt-in)
+def test_mesa_lite_flash_cryst_grid_z():
+    d = st.solve_track_ml(1.); ph = list(d["phase"]); order = [p for i, p in enumerate(ph) if i == 0 or ph[i - 1] != p]
+    assert order == ["pms", "ms", "subgiant", "rgb", "he-flash", "hb", "agb", "tp-agb", "wd"] and d["he_flash"]
+    assert .02 < d["t_pms"] < .06 and 9. < d["t_ms"] < 11.5 and .5 < d["M_wd"] < .65
+    assert d["t_cryst"] > d["t_end"] - 1e3 and d["wd_t_cryst"] > 0 and d["L_cryst"] < 1e-3          # WD crystallisation epoch
+    g = st.solve_track_ml(1., use_grid=False)
+    assert d["from_grid"] and np.allclose(g["L"], d["L"]) and np.allclose(g["t"], d["t"])           # stored grid == compute
+    assert st.solve_track_ml(1., .002)["t_ms"] < d["t_ms"] < st.solve_track_ml(1., .03)["t_ms"]
+
+def test_rt_buffer_parse_and_dynamics_conservative():
+    assert climate2d.parse_buffer(None) == (1., 0.) and climate2d.parse_buffer("n2") == (climate2d.N2_BUFFER_BAR, 0.)
+    assert climate2d.parse_buffer("h2:10:0.3") == (10., .3)
+    for bad in ("co2", "h2:x", "n2:1:2"):
+        try: climate2d.parse_buffer(bad); assert False
+        except ValueError: pass
+    h = hab(1.)
+    try: climate2d.init_gcm2d(h, SUN, None, None, rt_on=False, buffer="n2"); assert False
+    except ValueError: pass
+    g, _ = climate2d.init_gcm2d(h, SUN, None, None, rt_on=False, physics="dynamics")
+    assert "dynamics" in g.physics and g.dyn is not None and np.all((g.dyn >= climate2d.DYN_MIN) & (g.dyn <= climate2d.DYN_MAX))
+    assert np.abs(np.asarray(g.Lop.sum(1))).max() < 1e-9                                       # flux form: energy-conserving
+
+def test_rt_n2h2_cia_warms():
+    a = rt.radiation(260., S_toa=80., alb_s=.6, pco2=.1, rh_s=.3, ps=3.)["OLR"]
+    b = rt.radiation(260., S_toa=80., alb_s=.6, pco2=.1, rh_s=.3, ps=3., x_h2=.1)["OLR"]
+    assert np.ravel(b)[0] < np.ravel(a)[0] - 10.                                                # N2-H2 CIA greenhouse
+
+def test_moon_particle_and_evolving_gamma():
+    nb = sn.NBodySystem(SEJ["a"], SEJ["m"], SEJ["M_star"], SEJ["tilt"], SEJ["spin"], seed=1, e_init=[.0167, .048],
+                        tides=True, moon=True, moon_bodies=True)
+    o0 = nb.at(0, 0.)["obliquity"]; o = nb.at(0, 30.)["obliquity"]; ms = nb.moon_state()
+    assert abs(o - o0) < 2e-3 and ms is not None and "moonp" in nb.sig
+    assert sn.tide_kw("moon-ring") == dict(tides=True, moon="system", moon_bodies=False)
+    s = sn.SecularSystem([.03, .06], [sn.M_EARTH]*2, .15, [.4, .2], [1., 1.], seed=2, e_init=[.05, .03], tides=True)
+    s.at(0, 2e4); assert len(s.segA) >= 2                                                       # Gamma re-evaluated as spin evolves
+    a = sn.SecularSystem(SEJ["a"], SEJ["m"], SEJ["M_star"], SEJ["tilt"], SEJ["spin"], seed=1, e_init=[.0167, .048])
+    assert a.segA is None
+
+def test_pn_rates_imr_mpd():
+    a, e = 1e-3/gr.M_SUN_AU, .3                                                               # geometrized (GM_sun/c^2 units)
+    assert np.allclose(np.ravel(gr.pn_rates(a, e, 10., 10., order=0.)), np.ravel(gr.peters_rates(a, e, 10., 10.)))
+    p35 = gr.pn_rates(a, 0., 10., 10., order=3.5); p00 = gr.pn_rates(a, 0., 10., 10., order=0.)
+    assert abs(np.ravel(p35)[0]/np.ravel(p00)[0] - 1) < .01                                     # PN corrections small at x ~ 1e-5
+    t = gr.imr_tags(36., 29., 0., 0., 3.5, f_lo_hz=10.)
+    assert 80. < t["gr_imr_f_merge_hz"] < 200. < t["gr_imr_f_ring_hz"] < 400. and 30 < t["gr_imr_cycles_inband"] < 200
+    o = gr.mpd_orbit(10., .1, n_orb=2); assert abs(o["dE"]) < 1e-9 and abs(o["dLz"]) < 1e-8
+    u = gr.mpd_orbit(10., -.1, n_orb=2); c = gr.mpd_orbit(10., 0., n_orb=2)
+    assert u["Omega"] > c["Omega"] > o["Omega"] and np.ptp(c["r"]) < 1e-6                     # spin-orbit: aligned spin repels
+    assert gr.event_fields(1e8) == gr.event_fields(1e8, pn_order=0.)
+
+def test_species_div_conserves_and_diversifies():
+    cold = lambda: __import__("universe.leaves.packets", fromlist=["ClimateStress"]).ClimateStress(246., .3, "snowball", {"lat_T": list(np.linspace(240, 250, 12)), "lat_water": [1.]*12})
+    out = {}
+    for mode in ("species", "species-div"):
+        w = foodweb.make(mode, seed=3); w.closed = True; w.set_climate(cold()); w.seed(1.); M0 = w.total()
+        for _ in range(1500): w.set_climate(cold()); w.step(1., 1., 1.)
+        assert abs(w.total() - M0) < 1e-8*max(M0, 1); out[mode] = w.summary()
+    assert out["species-div"]["mode"] == "species-div"
+    pa = lambda s: s["n_species_alive"]
+    assert pa(out["species-div"]) > pa(out["species"]) and out["species-div"]["shannon_eff"] > out["species"]["shannon_eff"]
+
+def test_events_cosmo_time():
+    from universe import events as ev
+    n = 30
+    def gx():
+        r_ = np.random.default_rng(1); x = np.vstack([np.zeros((1, 3)), r_.normal(0, .05, (n, 3))]); v = np.zeros_like(x)
+        kind = np.r_[ev.SMBH, np.ones(n, int)]; m = np.r_[5., np.full(n, 1e-4)]
+        return dict(x=x, v=v, m=m, e2=np.full(n+1, 1e-4), kind=kind, gid=np.zeros(n+1, int), smass=np.r_[0., np.ones(n)], R=np.zeros(n+1))
+    EP = dict(ev.EDEFAULTS); EP["tde_r"] = .5; C = dict(galaxy_dt=1e-3, galaxy_steps=10, star_soft=.01, ev_every=1)
+    a = ev.run_events(gx(), C, EP, 1, 2, "direct"); b = ev.run_events(gx(), C, EP, 1, 2, "direct")
+    assert np.array_equal(a[0], b[0]) and not any("z" in e for e in a[-1]["log"]) and "cosmo" not in a[-1]
+    c = ev.run_events(gx(), dict(C, cosmo_drive={"z_start": 2.}), EP, 1, 2, "direct")
+    lc = c[-1]["log"]; assert lc and all(1.9 < e["z"] <= 2. and e["t_cosmic_gyr"] > 3. for e in lc if "t" in e)
+    assert c[-1]["cosmo"]["z_end"] < 2. and c[0].shape == a[0].shape
+
+
+def test_moon_particles_mixed_periods_stable():
+    # regression (seed-4 smoke system): the moon sub-step must follow the SHORTEST moon period; pairing max(a_m) with
+    # min(mu_m) under-resolved the tight moon of the lightest planet and blew up to NaN within a few years
+    a = [.8437, 1.4107, 2.6692, 4.4013, 8.2285, 13.0085]; m = [1.347e-05, 5.089e-4, 1.286e-05, 3.026e-05, 5.572e-05, 3.252e-06]
+    mm = np.array([1.657e-07, 6.260e-06, 1.286e-08, 3.026e-08, 5.572e-08, 4.000e-08])
+    am = np.array([.004233, .014204, .012484, .023545, .05174, .002636])
+    s = sn.NBodySystem(a, m, 1.4544, [19, 18, 21, 24, 59, 37], seed=4036, tides=True, moon=(mm, am), moon_bodies=True)
+    s.advance(20.); st = s.moon_state()
+    assert np.all(np.isfinite(s.s)) and np.allclose(st["a"], s.tides.am, rtol=.06) and np.all(st["e"] < .2)

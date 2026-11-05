@@ -25,10 +25,11 @@ class HostWeather(_P):
     age_Gyr: float = -1.; age0_Gyr: float = -1.; L0: float = 0.; T0: float = 0.; fr0: float = 0.; R_star: float = 1.
     hz_in_now: float = 0.; hz_out_now: float = 0.; L_track: list = field(default_factory=list); track_every: float = 200.
     age_prior_Gyr: float = -1.; age_source: str = "knob"; uv0: float = 0.; uv_bands: dict = field(default_factory=dict); phase: str = "ms"
-    solver_track: str = ""     # "" -> leaves.stellar toy track; "semi" -> universe.solvers.stellar_track (out-of-leaf ODE solver)
+    solver_track: str = ""     # "" -> leaves.stellar toy track; "semi" | "mesa_lite" -> universe.solvers.stellar_track (out-of-leaf ODE solver)
+    Z_star: float = -1.        # host metallicity for the solver track (<0 -> solar); set by life_loop.host_weather / solvers["stellar_Z"]
     def _trk(self):
         if self.solver_track:
-            from ..solvers import stellar_track; return stellar_track
+            from ..solvers import stellar_track; return stellar_track.api(self.solver_track, self.Z_star)
         return stellar
     @classmethod
     def from_star(cls, M, L, T, distance_pc=10.):

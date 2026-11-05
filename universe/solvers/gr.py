@@ -17,7 +17,17 @@ Geometrized units G = c = 1 with lengths/times in units of the hole mass M unles
     marginally-bound capture gate (r_mb = 2 - a + 2 sqrt(1-a)) that swallows stars whole (no flare / AGN fuel).
     At galactic resolution (softening >> r_g) the PW term is numerically negligible; the capture gate is what changes runs.
 Fidelity / gaps: test-particle geodesics (no self-force, no spin-curvature coupling); vacuum Kerr (no accretion-disk
-radiative transfer); Peters is leading-order (0PN radiation reaction); remnant/ringdown are NR fits, no merger waveform."""
+radiative transfer); Peters is leading-order (0PN radiation reaction); remnant/ringdown are NR fits, no merger waveform.
+Opt-in upgrades (default outputs unchanged):
+  * pn_rates / inspiral_pn(order 0..3.5): quasi-circular TaylorT4 energy-flux series through 3.5PN (incl. the 3PN log and
+    the 1.5/2.5/3.5PN tail terms; Blanchet 2014) times the Peters eccentricity enhancement -- exact Peters at order 0,
+    exact quasi-circular PN as e -> 0; no eccentric PN enhancement functions, no spin-orbit/spin-spin flux terms.
+    pn_cycles(): cycles / time in band.  Events: C["gr_pn"] = order adds gr_t_merge_pn_yr and the IMR tags.
+  * imr_tags(): PhenomA (Ajith+ 2008) merger / ringdown / cut-off frequencies + NR-fit remnant QNM + in-band cycles.
+    Tags only: no h(t)/h(f) waveform is synthesised, no NR surrogate, spins only via the remnant.
+  * mpd_orbit(): Mathisson-Papapetrou-Dixon spinning test body in Schwarzschild (Tulczyjew SSC, linear in spin,
+    aligned spin, equatorial) with Dixon-Killing E, L_z monitored (conserved to ~1e-11).  Still a test body: no
+    self-force, no Kerr background for MPD, no spin precession for misaligned spins.  None of this is SpEC/NR."""
 import numpy as np
 from scipy.integrate import solve_ivp
 
@@ -178,7 +188,7 @@ def capture_radius(a=0.):
 
 
 # ----------------------------------------------------------------- events hook
-def event_fields(M_bh_msun, chi=0., r_peri_au=None, m2_msun=None, a_bin_au=None, e_bin=0.):
+def event_fields(M_bh_msun, chi=0., r_peri_au=None, m2_msun=None, a_bin_au=None, e_bin=0., pn_order=0.):
     """Extra GR fields for an event-log entry: Kerr ISCO/photon orbit/horizon (AU), efficiency, ISCO GW frequency;
     for a pericentre passage r_peri_au -> plunge/capture flag from the marginally bound orbit r_mb = 2 - a + 2 sqrt(1 - a);
     for a binary (m2, a_bin, e_bin) -> Peters merger time."""
@@ -189,4 +199,139 @@ def event_fields(M_bh_msun, chi=0., r_peri_au=None, m2_msun=None, a_bin_au=None,
         rmb = (2 - abs(a) + 2*np.sqrt(1 - abs(a)))*rg; d.update(gr_r_mb_au=float(rmb), gr_captured=bool(r_peri_au < rmb))
     if m2_msun is not None and a_bin_au is not None:
         d["gr_t_merge_yr"] = inspiral(a_bin_au, e_bin, M, float(m2_msun))["t_merge_yr"]
+        if pn_order: d["gr_t_merge_pn_yr"] = inspiral_pn(a_bin_au, e_bin, M, float(m2_msun), pn_order)["t_merge_yr"]
     return d
+
+
+# ----------------------------------------------------------------- higher-PN inspiral (opt-in: inspiral(..., pn_order=...))
+GAMMA_E = 0.5772156649015329
+
+def _pn_flux_coeffs(nu):
+    """TaylorT4 coefficients of dx/dt = 64 nu/5 x^5 sum_k c_k x^(k/2), x = (M omega)^(2/3), quasi-circular, non-spinning
+    (Blanchet 2014 Living Rev. Rel. 17, 2, eq. 317 / Buonanno+ 2009 Table; the 3PN log term is handled in _pn_series)."""
+    pi = np.pi
+    return {0: 1., 2: -743/336 - 11/4*nu, 3: 4*pi, 4: 34103/18144 + 13661/2016*nu + 59/18*nu*nu,
+            5: -(4159/672 + 189/8*nu)*pi,
+            6: (16447322263/139708800 - 1712/105*GAMMA_E + 16/3*pi*pi + (-56198689/217728 + 451/48*pi*pi)*nu
+                + 541/896*nu*nu - 5605/2592*nu**3),
+            7: (-4415/4032 + 358675/6048*nu + 91495/1512*nu*nu)*pi}
+
+def _pn_series(x, nu, order):
+    c = _pn_flux_coeffs(nu); kmax = int(round(2*order)); s = 0.
+    for k, ck in c.items():
+        if k <= kmax: s = s + ck*x**(k/2)
+    if kmax >= 6: s = s - 856/105*np.log(16*x)*x**3
+    return s
+
+def pn_rates(a, e, m1, m2, order=3.5):
+    """Orbit-averaged da/dt, de/dt (geometrized, like peters_rates) at PN order 0..3.5 (half-integers).  Quasi-circular
+    flux through `order` (TaylorT4 series in x = M/a) times the Peters eccentricity enhancement; de/dt keeps the Peters
+    de/da ratio.  order=0 is exactly peters_rates.  Eccentric PN corrections (Arun+ 2009 enhancement functions) are NOT
+    included (exact as e -> 0; leading-order in e otherwise); a is the PN parameter M/x, not a gauge-invariant separation."""
+    da, de = peters_rates(a, e, m1, m2)
+    if order <= 0: return da, de
+    M = m1 + m2; nu = m1*m2/M**2; x = M/a; f = _pn_series(x, nu, order)
+    return da*f, de*f
+
+def inspiral_pn(a_au, e0, m1, m2, order=3.5, a_stop_M=6.):
+    """Like inspiral() with pn_rates at `order`; stops at a = a_stop_M M or where the PN flux turns over."""
+    a0 = a_au/M_SUN_AU; M = m1 + m2; ast = a_stop_M*M
+    if a0 <= ast: return dict(t_yr=np.zeros(1), a_au=np.array([a_au]), e=np.array([e0]), t_merge_yr=0., pn_order=order)
+    def rhs(xl, y):
+        a = np.exp(xl); e = min(max(y[1], 0.), .999999); da, de = pn_rates(a, e, m1, m2, order)
+        da = min(da, -1e-300); return [a/da, de*a/da]
+    sol = solve_ivp(rhs, (np.log(a0), np.log(ast)), [0., e0], method="DOP853", rtol=1e-10, atol=1e-14)
+    t = sol.y[0]*M_SUN_S/YR_S
+    return dict(t_yr=t, a_au=np.exp(sol.t)*M_SUN_AU, e=sol.y[1], t_merge_yr=float(t[-1]), pn_order=order)
+
+def pn_cycles(f_lo_hz, m1, m2, order=3.5, f_hi_hz=None):
+    """GW cycles and time (s) from f_lo to f_hi (default f_ISCO) on the quasi-circular TaylorT4 track."""
+    M = m1 + m2; nu = m1*m2/M**2; f_hi = f_hi_hz or f_gw_isco_hz(M)
+    xl = (np.pi*M*M_SUN_S*f_lo_hz)**(2/3); xh = (np.pi*M*M_SUN_S*f_hi)**(2/3)
+    xs = np.linspace(xl, xh, 20001); dxdt = 64*nu/5*xs**5*_pn_series(xs, nu, order)/(M*M_SUN_S)
+    dt = 1/np.maximum(dxdt, 1e-300); om = xs**1.5/(M*M_SUN_S)
+    T = float(np.trapezoid(dt, xs)); N = float(np.trapezoid(om/np.pi*dt, xs))
+    return dict(t_s=T, n_cycles=N)
+
+
+# ----------------------------------------------------------------- phenomenological IMR tags (PhenomA, Ajith+ 2008)
+_PHENOM_A = dict(f_merg=(2.9740e-1, 4.4810e-2, 9.5560e-2), f_ring=(5.9411e-1, 8.9794e-2, 1.9111e-1),
+                 sigma=(5.0801e-1, 7.7515e-2, 2.2369e-2), f_cut=(8.4845e-1, 1.2848e-1, 2.7299e-1))
+
+def imr_tags(m1_msun, m2_msun, chi1=0., chi2=0., order=3.5, f_lo_hz=10.):
+    """Phenomenological inspiral-merger-ringdown tags: PhenomA transition frequencies (Ajith et al. 2008 PRD 77 104017,
+    non-spinning: f = (a nu^2 + b nu + c)/(pi M)), the Kerr QNM ringdown of the NR-fit remnant, and TaylorT4 cycles /
+    time in band from f_lo.  Tags only -- no waveform h(t) is synthesised and spins enter only through the remnant."""
+    M = float(m1_msun + m2_msun); nu = m1_msun*m2_msun/M**2; tM = np.pi*M*M_SUN_S
+    ph = {k: float((a*nu*nu + b*nu + c)/tM) for k, (a, b, c) in _PHENOM_A.items()}
+    cyc = pn_cycles(f_lo_hz, m1_msun, m2_msun, order, ph["f_merg"]) if f_lo_hz < ph["f_merg"] else dict(t_s=0., n_cycles=0.)
+    rd = ringdown_fields(m1_msun, m2_msun, chi1, chi2)
+    return dict(gr_imr_model="PhenomA-tags", gr_imr_f_merge_hz=ph["f_merg"], gr_imr_f_ring_hz=ph["f_ring"],
+                gr_imr_sigma_hz=ph["sigma"], gr_imr_f_cut_hz=ph["f_cut"], gr_imr_f_qnm_hz=rd["gr_ringdown_f_hz"],
+                gr_imr_t_inband_s=cyc["t_s"], gr_imr_cycles_inband=cyc["n_cycles"], gr_imr_f_lo_hz=float(f_lo_hz), gr_pn_order=float(order))
+
+
+# ----------------------------------------------------------------- MPD spinning test body (Schwarzschild, opt-in)
+def _schw_g(r, th):
+    f = 1 - 2/r; s2 = np.sin(th)**2
+    return np.diag([-f, 1/f, r*r, r*r*s2])
+
+def _schw_gamma(r, th):
+    """Christoffel symbols Gamma^a_{bc} of Schwarzschild (M = 1)."""
+    f = 1 - 2/r; G = np.zeros((4, 4, 4)); s, c = np.sin(th), np.cos(th)
+    G[0, 0, 1] = G[0, 1, 0] = 1/(r*r*f); G[1, 0, 0] = f/(r*r); G[1, 1, 1] = -1/(r*r*f)
+    G[1, 2, 2] = -r*f; G[1, 3, 3] = -r*f*s*s; G[2, 1, 2] = G[2, 2, 1] = 1/r; G[2, 3, 3] = -s*c
+    G[3, 1, 3] = G[3, 3, 1] = 1/r; G[3, 2, 3] = G[3, 3, 2] = c/s
+    return G
+
+def _schw_riemann(r, th, h=1e-5):
+    """R^a_{bcd} = d_c G^a_{db} - d_d G^a_{cb} + G^a_{ce} G^e_{db} - G^a_{de} G^e_{cb} (finite-differenced in r, theta)."""
+    G = _schw_gamma(r, th); dG = np.zeros((4, 4, 4, 4))           # dG[c, a, b, d] = d_c G^a_{bd}
+    hr = h*r; dG[1] = (_schw_gamma(r + hr, th) - _schw_gamma(r - hr, th))/(2*hr)
+    dG[2] = (_schw_gamma(r, th + h) - _schw_gamma(r, th - h))/(2*h)
+    R = (np.einsum("cadb->abcd", dG) - np.einsum("dacb->abcd", dG)
+         + np.einsum("ace,edb->abcd", G, G) - np.einsum("ade,ecb->abcd", G, G))
+    return R
+
+def _levi_lower(r, th):
+    """epsilon_{abcd} with epsilon_{t r th ph} = sqrt(-g) = r^2 sin th."""
+    import itertools
+    E = np.zeros((4, 4, 4, 4)); sg = r*r*np.sin(th)
+    for p in itertools.permutations(range(4)):
+        sgn = np.linalg.det(np.eye(4)[list(p)]); E[p] = sgn*sg
+    return E
+
+def _mpd_rhs(tau, y):
+    x = y[:4]; u = y[4:8]; S = np.zeros((4, 4)); iu = np.triu_indices(4, 1); S[iu] = y[8:]; S = S - S.T
+    r, th = x[1], x[2]; G = _schw_gamma(r, th); R = _schw_riemann(r, th)
+    du = -np.einsum("abc,b,c->a", G, u, u) - .5*np.einsum("abcd,b,cd->a", R, u, S)
+    dS = -np.einsum("abc,b,cd->ad", G, u, S) - np.einsum("dbc,b,ac->ad", G, u, S)
+    return np.concatenate([u, du, dS[iu]])
+
+def mpd_killing(y):
+    """Dixon-Killing conserved energy and z-angular momentum  Q = xi.u + 1/2 S^{ab} nabla_a xi_b  (per unit mass)."""
+    x = y[:4]; u = y[4:8]; S = np.zeros((4, 4)); iu = np.triu_indices(4, 1); S[iu] = y[8:]; S = S - S.T
+    r, th = x[1], x[2]; g = _schw_g(r, th); G = _schw_gamma(r, th); out = []
+    for k, sgn in ((0, -1.), (3, 1.)):
+        xi_l = g[:, k]; h = 1e-6*r; dxi = np.zeros((4, 4))           # d_a xi_b
+        dxi[1] = (_schw_g(r + h, th)[:, k] - _schw_g(r - h, th)[:, k])/(2*h)
+        dxi[2] = (_schw_g(r, th + 1e-6)[:, k] - _schw_g(r, th - 1e-6)[:, k])/2e-6
+        nab = dxi - np.einsum("lab,l->ab", G, xi_l)
+        out.append(sgn*(xi_l @ u + .5*np.einsum("ab,ab->", S, nab)))
+    return dict(E=out[0], Lz=out[1])
+
+def mpd_orbit(r0, s=0., n_orb=3, n_out=2000):
+    """Mathisson-Papapetrou-Dixon spinning test body in Schwarzschild (M = 1), spin s (units mu M) aligned with the
+    orbital angular momentum, Tulczyjew SSC, linear in spin (p = mu u, DS/dtau = 0 at O(S)).  Starts on the circular
+    geodesic velocity at r0; the spin-curvature force -1/2 R^a_{bcd} u^b S^{cd} then perturbs it.  Returns
+    dict(tau, t, r, phi, Omega (mean dphi/dt), dE, dLz (Dixon-Killing drifts), r_range)."""
+    th = np.pi/2; f = 1 - 2/r0; Om = r0**-1.5; ut = 1/np.sqrt(f - r0*r0*Om*Om); u = np.array([ut, 0., 0., Om*ut])
+    g = _schw_g(r0, th); E = _levi_lower(r0, th); Sv = np.array([0., 0., -s/r0, 0.])           # spin vector along +z
+    S_l = np.einsum("abcd,c,d->ab", E, u, Sv)                                                 # S_{ab} = eps_{abcd} u^c S^d
+    gi = np.linalg.inv(g); S_u = gi @ S_l @ gi.T; iu = np.triu_indices(4, 1)
+    y0 = np.concatenate([[0., r0, th, 0.], u, S_u[iu]]); T = n_orb*2*np.pi*r0**1.5/ut
+    sol = solve_ivp(_mpd_rhs, (0, T), y0, method="DOP853", rtol=1e-11, atol=1e-12, t_eval=np.linspace(0, T, n_out))
+    q0 = mpd_killing(sol.y[:, 0]); q1 = mpd_killing(sol.y[:, -1])
+    t, r, ph = sol.y[0], sol.y[1], sol.y[3]
+    return dict(tau=sol.t, t=t, r=r, phi=ph, Omega=float(ph[-1]/t[-1]), dE=float(q1["E"] - q0["E"]), dLz=float(q1["Lz"] - q0["Lz"]),
+                r_range=(float(r.min()), float(r.max())), E=q0["E"], Lz=q0["Lz"])

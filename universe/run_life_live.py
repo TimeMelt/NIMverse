@@ -67,7 +67,7 @@ class LiveSim:
         self.multi = len(hs) > 1 or (multi and not planet)
         self.seed, self.max_show = seed, max_show
         sv = dict(solvers or {}); orbs = {}
-        if sv.get("stellar_solver"): hw.solver_track = "semi"
+        from .leaves.life_loop import apply_stellar_solver; apply_stellar_solver(hw, sv)
         if sv.get("orbit_solver") and climate_model in ("lat", "gcm2d"):
             from .solvers import secular_nbody; orbs = secular_nbody.drivers_from_system(S, habs, seed, sv["orbit_solver"], **secular_nbody.tide_kw(sv.get("orbit_tides")))
         self.runs = [HabitatRun(h, hw, LP, np.random.default_rng(planet_seed(seed, h.name) if self.multi else seed), None, dt, plant, culture=culture,

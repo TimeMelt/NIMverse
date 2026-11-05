@@ -74,6 +74,9 @@ CLOUD_TAU_LW, CLOUD_SIG = 8., .5             # cloud deck in the layer nearest p
 CIA_CO2 = np.array([1.5e-6, 1e-7, 0., 0., 0., 0., 0., 4e-7, 5e-8, 0., 0.])
 CIA_N2 = np.array([3e-8, 2e-9, 0., 0., 0., 0., 0., 0., 0., 0., 0.])
 CIA_CO2H2 = np.array([4e-6, 3e-6, 1e-6, 0., 0., 0., 0., 2e-7, 0., 0., 0.])
+# N2-H2 (Wordsworth & Pierrehumbert 2013, Science 339, 64: ~10 % H2 in a N2 atmosphere closes the 0-700 cm^-1 window);
+# only used when x_h2 > 0 (GCM2D buffer="h2"/"auto"), so the default tables are unchanged.
+CIA_N2H2 = np.array([1.2e-6, 9e-7, 3e-7, 5e-8, 0., 0., 0., 0., 0., 0., 0.])
 N_LOSCH, KB, AMU = 2.6868e25, 1.380649e-23, 1.66054e-27
 CP_CO2_MOL = 37100.                          # J kmol^-1 K^-1 (cp/R ~ 4.46 at 250 K) -> CO2 atmospheres have a shallower adiabat
 # ---- CO2 condensation (Clausius-Clapeyron fits through the triple point; sublimation below, vaporisation above)
@@ -256,6 +259,8 @@ def lw_optical_depth(c):
         grey = (K_CH4[b] * c.q_ch4 + K_O3[b] * c.q_o3) * c.dm
         if cia and (CIA_CO2[b] or CIA_N2[b] or CIA_CO2H2[b]):
             grey = grey + CIA_CO2[b] * pc_ + CIA_N2[b] * pn_ + CIA_CO2H2[b] * ph_
+        if cia and CIA_N2H2[b] and np.any(c.x_h2):
+            grey = grey + CIA_N2H2[b] * xn * xh * tf
         if b in CONT_BANDS:
             kcont = CONT_K[CONT_BANDS.index(b)] * (e / 1.5e3) * np.exp(1800. * (1. / c.Tm - 1. / 296.))
             grey = grey + kcont * c.q * c.dm

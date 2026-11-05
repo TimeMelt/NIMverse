@@ -157,6 +157,12 @@ N_SPECIES = 18
 PPMR_LOG, PPMR_W = 2., 1.3       # preferred log10 predator/prey body-mass ratio and diet width (decades)
 THERM_W = 8.                     # K thermal niche half-width
 NICHE_W = 10.                    # K: competition overlap alpha_ij = exp(-(Topt_i - Topt_j)^2 / (4 NICHE_W^2))
+# diversity mode (make("species-div")): niche packing, regional immigration, stabilising self-limitation, trait evolution
+DIV_IMM = 2e-4                   # yr^-1 x K: propagule rain per species from the regional pool (taken from Nut -> mass-conserving)
+DIV_PERF_MIN = .05               # relative thermal performance needed for an immigrant to establish
+DIV_SELF = .6                    # extra intraspecific self-limitation m_self B_i^2 / (K k_i / nP) (Chesson stabilising term)
+DIV_VG = 4.                      # K^2: heritable T_opt variance (Lande 1976 quantitative-genetics rate, per generation-year)
+DIV_PACK = 1.5                   # niche packing: producer T_opt spread over band T range +- DIV_PACK THERM_W
 SP = dict(a_P=1., a_C=2.6, half=.12, i=6., e_herb=.35, e_carn=.3, r_P=P_RESP, m_P=P_MORT, r_C=.12, m_C=.06)
 
 
@@ -172,7 +178,8 @@ class SpeciesWeb:
     Trophic levels are diagnosed from realised diets; the Biosphere API sees P = producers, C = consumers
     (properties H/C/X are the consumers binned by trophic level <2.5, 2.5-3.5, >3.5), D = decomposers.
     Exact mass conservation (all fluxes move mass between compartments; tested)."""
-    def __init__(self, n=N_SPECIES, seed=0, closed=False):
+    def __init__(self, n=N_SPECIES, seed=0, closed=False, diversity=False):
+        self.diversity = bool(diversity); self._packed = False
         r = np.random.default_rng([int(seed) % 2**31, 4243])
         self.n = n; nP = max(3, n//3); self.nP = nP
         lm = np.linspace(-7., 3., n) + r.uniform(-.3, .3, n)          # size spectrum: ~0.6 decades apart, producers smallest
@@ -224,13 +231,31 @@ class SpeciesWeb:
         wat = np.asarray(st.get("lat_water") or [1.]*len(Tb), float)
         if len(wat) != len(Tb): wat = np.ones(len(Tb))
         w = wat/wat.sum() if wat.sum() > 0 else np.ones(len(Tb))/len(Tb)
+        if self.diversity and not self._packed: self._pack(Tb, w)
         E = np.exp(-((Tb[None, :] - self.Topt[:, None])/THERM_W)**2); perf = (E*w[None, :]).sum(1)
+        self._Tb, self._w = Tb, w
         self.perf = perf/max(float(perf.max()), 1e-9)          # relative: absolute productivity is already in K
         # MacArthur utilisation overlap over the habitat's latitude bands: alpha_ij = sum w e_i e_j / sum w e_i^2,
         # capacity share k_i = sum w e_i (the habitat fraction species i can use) -> coexistence of thermal specialists
         Ew = E*w[None, :]; ii = (Ew*E).sum(1)
         self.alpha = np.where(self.prod[:, None] & self.prod[None, :], (Ew @ E.T)/np.maximum(ii[:, None], 1e-12), 0.)
         self.kshare = np.clip(perf/max(float(perf[self.prod].max()), 1e-9), 1e-6, 1.)
+    def _pack(self, Tb, w):
+        """Niche packing: re-centre the T_opt of producers (evenly) and consumers (shuffled) on the habitat's band
+        temperatures, spaced ~THERM_W apart (limiting similarity, MacArthur & Levins 1967).  Only once, before seeding."""
+        lo = float(Tb[w > 0].min()) if (w > 0).any() else float(Tb.min()); hi = float(Tb[w > 0].max()) if (w > 0).any() else float(Tb.max())
+        lo, hi = lo - DIV_PACK*THERM_W*.5, hi + DIV_PACK*THERM_W*.5
+        p = self.prod; r = np.random.default_rng([int(self.n), 4244])
+        self.Topt = self.Topt.copy(); self.Topt[p] = np.linspace(lo, hi, int(p.sum()))
+        self.Topt[~p] = r.uniform(lo, hi, int((~p).sum())); self._packed = True
+    def _evolve(self, dt):
+        """Trait evolution of living species: dT_opt/dt = V_G d ln g/dT_opt (gradient of the realised thermal performance)."""
+        if not hasattr(self, "_Tb"): return
+        Tb, w = self._Tb, self._w; al = self.B > 0
+        E = np.exp(-((Tb[None, :] - self.Topt[:, None])/THERM_W)**2)*w[None, :]
+        g = E.sum(1); dg = (E*2*(Tb[None, :] - self.Topt[:, None])/THERM_W**2).sum(1)
+        sel = np.where(g > 1e-12, dg/np.maximum(g, 1e-12), 0.)
+        self.Topt = np.where(al, self.Topt + np.clip(DIV_VG*sel*dt, -1., 1.), self.Topt)
     def _fluxes(self, mu, K):
         """(src, dst, rate) arrays over the flat state [Nut, Det, Dc, B_0..B_n-1]."""
         n = self.n; B = self.B; g = self.perf; p = self.prod; src, dst, rate = [], [], []
@@ -242,6 +267,11 @@ class SpeciesWeb:
         crowd = np.maximum(0., 1 - (self.alpha[np.ix_(p, p)] @ B[p])/Ki)
         add(0, ip, mu*SP["a_P"]*self.A[p]*g[p]*B[p]*self.Nut/(self.Nut + K_N)*crowd)
         add(ip, 0, mu*SP["r_P"]*B[p]); add(ip, 1, mu*SP["m_P"]*B[p]*(1 + B[p].sum()/Kp))
+        if self.diversity:                                                 # stabilising: intra- > inter-specific limitation
+            Kself = np.maximum(Ki/max(int(p.sum()), 1), 1e-9); add(ip, 1, mu*DIV_SELF*B[p]**2/Kself)
+            Bc_ = B[~p]; Kc = max(.3*Kp/max(int((~p).sum()), 1), 1e-9); add(ic, 1, mu*DIV_SELF*Bc_**2/Kc)
+            imm = DIV_IMM*Kp*mu*((self.perf >= DIV_PERF_MIN) & p)[p]*(self.Nut > 0)   # regional producer rain (Nut -> B)
+            add(0, ip, imm)
         R = self.phi @ B                                                   # available prey per predator
         Bc = B[~p]; Rc = R[~p]; Ac = self.A[~p]; gc = .3 + .7*g[~p]/max(g.max(), 1e-9)
         ing = mu*SP["a_C"]*Ac*gc*Rc*Bc/(SP["half"] + Rc + SP["i"]*Bc)
@@ -266,6 +296,7 @@ class SpeciesWeb:
         if K <= 0:
             led["loss"] += float(x[2:].sum()); x[1] += x[2:].sum(); x[2:] = 0.; self._put(x); self.alive = False; return led
         self._put(x)
+        if self.diversity: self._evolve(dt)
         if invade:                                   # immigration: consumers whose prey is established, producers whose niche is open
             p = self.prod; R = self.phi @ self.B; Ps = self.B[p].sum()
             for i in range(self.n):
@@ -304,7 +335,7 @@ class SpeciesWeb:
         sl = float(np.polyfit(self.logm[al], np.log10(B[al]), 1)[0]) if al.sum() >= 3 else None
         g = dict(P=self.P, H=self.H, C=self.C, X=self.X, Dc=float(self.Dc))
         mtl = float((TL*B).sum()/B.sum()) if B.sum() > 0 else 0.
-        return dict(mode="species", guilds={k: float(v) for k, v in g.items()}, pools=dict(Nut=float(self.Nut), Det=float(self.Det)),
+        return dict(mode="species-div" if self.diversity else "species", guilds={k: float(v) for k, v in g.items()}, pools=dict(Nut=float(self.Nut), Det=float(self.Det)),
                     total=float(self.total()), living=float(lv), n_species=int(self.n), n_species_alive=int(al.sum()),
                     shannon_eff=float(np.exp(-(pr*np.log(pr)).sum())), size_spectrum_slope=sl, max_trophic_level=float(TL[al].max()) if al.any() else 0.,
                     n_guilds_alive=int(sum(v > 1e-6 for v in g.values())), mean_trophic_level=mtl,
@@ -312,5 +343,6 @@ class SpeciesWeb:
 
 
 def make(mode=True, seed=0):
-    """FoodWeb (mode True/'guild', the default) or SpeciesWeb (mode 'species')."""
-    return SpeciesWeb(seed=seed) if mode == "species" else FoodWeb()
+    """FoodWeb (mode True/'guild', the default) or SpeciesWeb (mode 'species'; 'species-div' adds the diversity terms)."""
+    if mode in ("species", "species-div"): return SpeciesWeb(seed=seed, diversity=mode == "species-div")
+    return FoodWeb()

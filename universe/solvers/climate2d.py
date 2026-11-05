@@ -36,6 +36,16 @@ cells only.  Extra stressors: grid_* (per-cell T, water, ice, land), grid_lon_de
                  seasonal range for ice / liquid water and makes OLR nonlinear (<T^4> correction).
       winds   -- Held-Hou Hadley edge (Earth-relative transport boost inside phi_H) + friction-limited thermal wind U(lat)
                  with conservative upwind zonal advection of heat (boundary-layer share) and moisture.
+      dynamics -- baroclinic-eddy closure: meridional atmospheric diffusivity per face D_k = D (|dT/dy|_k / |dT/dy|_Earth)^DYN_N
+                 (Stone 1972 / Held 1999 diffusive closure, DYN_N = 1, clipped [DYN_MIN, DYN_MAX]) recomputed from the zonal-mean
+                 T every integrate call; flux form (symmetric, zero row sums) so heat is conserved exactly (tested).  The eddy
+                 flux therefore responds to the planet's own temperature gradient instead of a fixed Earth-calibrated D.
+      frost   -- seasonal CO2 frost cycle (RT path): condensing caps are pinned at T_sat by latent heat (L_s dM_sat/dT >> C_seas),
+                 so the atmosphere is limited by the annual-mean cold trap, not the winter minimum; the seasonal frost-cap mass
+                 exchange (kg m^-2 and the resulting p_atm seasonal range) is diagnosed from the winter energy deficit / L_s.
+  * Background-gas buffer (buffer=None|"n2"|"h2"|"auto", CLI --rt-buffer; RT path only): "n2" N2_BUFFER_BAR of N2 (pressure
+    broadening, N2-N2 CIA, transport ~ p); "h2" + X_H2_BUFFER of H2 (N2-H2 CIA, Wordsworth & Pierrehumbert 2013); "auto"
+    starts from the leaf 1-bar N2 column and adds n2, then n2+h2 only while the equilibrium is a snowball (last["buffer"]).
 
 Fidelity: still an EBM on a 2-D grid, not a primitive-equation GCM: no prognostic momentum / eddies / stationary waves,
 meridional transport stays diffusive (Hadley only rescales it), clouds are one condensate path with no vertical
@@ -105,7 +115,7 @@ def seasonal_insolation(x, obliquity, e=0., varpi=0., nt=48):
 
 class GCM2D:
     """lat x lon EBM; drop-in for leaves.world.LatClimate (see module doc)."""
-    def __init__(self, h, LP=None, hw=None, n=24, nlon=N_LON, orbit=None, rt_on=False, spinup=True, physics=()):
+    def __init__(self, h, LP=None, hw=None, n=24, nlon=N_LON, orbit=None, rt_on=False, spinup=True, physics=(), buffer=None):
         P = as_bus(LP); self.n, self.nlon = n, nlon; self.x = band_x(n); self.lat = np.degrees(np.arcsin(self.x)); self.orbit = orbit
         self.lon = np.degrees((np.arange(nlon) + .5)*2*np.pi/nlon - np.pi); self.rt = bool(rt_on); self.N = n*nlon
         oc = float(np.clip(h.volatiles, 0, 1)) if h.ptype in ("ocean", "terran", "ice") else float(np.clip(.5*h.volatiles, 0, 1))
@@ -116,7 +126,7 @@ class GCM2D:
         Rrel = float(np.clip((h.m/3e-6)**(1./3.), .3, 4.)); self.Rrel = Rrel
         self.D = float(np.clip(P["lat_diffusion"]*Rrel**D_SIZE/max(h.spin, .3)**.5, .05, 5.))
         self.p_atm = None; self.co2_ice = 0.; self.f_D = 1.
-        self.physics = parse_physics(physics); self.spin = float(max(h.spin, 1e-3)); self.clw = None; self.U = np.zeros(n)
+        self.physics = parse_physics(physics); self.spin = float(max(h.spin, 1e-3)); self.clw = None; self.U = np.zeros(n); self.dyn = None
         self.hm = self._hadley() if "winds" in self.physics else None
         self.Lop = self._Ldiff = self._laplacian(); self._Adv = None
         A = float(np.clip(ALBEDO[h.ptype]*P["albedo_mult"], 0, .95))
@@ -124,7 +134,8 @@ class GCM2D:
         if h.ptype == "desert": aw = float(np.clip(aw + DESERT_ALB, .02, .9))
         self.alb_band = np.clip(aw + ALB_P2*(1.5*self.x**2 - .5), .02, .9)
         self.alb_ice_band = np.maximum(self.alb_band, ALB_ICE)
-        self.g = float(round(9.81*np.clip((h.m/3e-6)**.46, .2, 6.), 1)); self.ps = 1.
+        self.g = float(round(9.81*np.clip((h.m/3e-6)**.46, .2, 6.), 1)); self.ps = 1.; self.x_h2 = 0.; self.buffer = None
+        if buffer: self.set_buffer(buffer)
         self.x_o2 = 0.; self.x_ch4 = 1e-7
         self.pCO2 = P_REF; self.t = 0.; self.Tg = None; self.Tdg = None; self.G = 0.; self.last = {}; self.tech_co2_mult = 1.; self.limit_cycle = None
         self.moist = np.where(lf, .5, 1.); self.orb = self._orbit(h, 0.)
@@ -148,7 +159,9 @@ class GCM2D:
         v = np.asarray(v, float); self.Tdg = np.repeat(v[:, None], self.nlon, 1) if v.ndim == 1 else v.copy()
 
     def _laplacian(self, wa=ATM_D, wo=OCEAN_D):
-        n, m = self.n, self.nlon; hm = np.ones(n - 1) if getattr(self, "hm", None) is None else self.hm; dx = 2./n; dl = 2*np.pi/m; idx = np.arange(self.N).reshape(n, m); oc = self.oc_m
+        n, m = self.n, self.nlon; hm = np.ones(n - 1) if getattr(self, "hm", None) is None else self.hm; dx = 2./n
+        if getattr(self, "dyn", None) is not None: hm = hm*self.dyn
+        dl = 2*np.pi/m; idx = np.arange(self.N).reshape(n, m); oc = self.oc_m
         rows, cols, vals = [], [], []
         def face(a, b, c):
             rows.extend([a, b]); cols.extend([b, a]); vals.extend([c, c])
@@ -174,6 +187,24 @@ class GCM2D:
             if getattr(self, "_La", None) is None: self._La, self._Lo = self._laplacian(1., 0.), self._laplacian(0., 1.)
             self.f_D = f; self._Ldiff = (ATM_D*f*self._La + OCEAN_D*self._Lo).tocsc(); self._set_L()
         return self.f_D
+    def set_buffer(self, mode):
+        """Background gas (RT path): None/"n2"/"h2" (see module doc); "auto" is resolved by init_gcm2d."""
+        self.buffer = None if mode in (None, "none") else str(mode); self.ps, self.x_h2 = parse_buffer(self.buffer)
+        if getattr(self, "_La", None) is not None: self.f_D = 1.; self._transport(self.p_atm or 0.)
+    def _dynamics(self, T):
+        """'dynamics': baroclinic eddy diffusivity factor per meridional face from |dT/dy| (see module doc).  Rebuilds the
+        flux-form operator when any face moves > 5 %."""
+        Tz = T.reshape(self.n, self.nlon).mean(1); xe = np.linspace(-1, 1, self.n + 1)[1:-1]; a = 6.371e6*self.Rrel
+        dphi = np.diff(np.arcsin(self.x)); grad = np.abs(np.diff(Tz))/np.maximum(dphi*a, 1.)
+        f = np.clip((grad/DYN_GRAD_EARTH)**DYN_N, DYN_MIN, DYN_MAX)
+        if self.dyn is None or np.max(np.abs(f/self.dyn - 1)) > .05:
+            self.dyn = f; self._La = None; self._Ldiff = self._laplacian()
+            if self.rt and self.f_D != 1.: fD = self.f_D; self.f_D = 1.; self._transport_set(fD)
+            self._set_L()
+        return self.dyn
+    def _transport_set(self, f):
+        self._La, self._Lo = self._laplacian(1., 0.), self._laplacian(0., 1.); self.f_D = f
+        self._Ldiff = (ATM_D*f*self._La + OCEAN_D*self._Lo).tocsc()
     def _set_L(self):
         self.Lop = self._Ldiff if self._Adv is None else (self._Ldiff + self._Adv).tocsc()
 
@@ -229,9 +260,24 @@ class GCM2D:
         trap (coldest zonal band in winter, T - amp/2): the rest sits as surface CO2 ice (self.co2_ice, bar).  Smooth min
         (p^-4 + p_sat^-4)^-1/4 so the solve stays differentiable.  The carbon cycle keeps the total (C_atm) inventory."""
         if not rt.PHYS.get("co2_cond", True): return pc
+        if "frost" in self.physics: return self._co2_frost(pc, T, amp)
         Tz = (T - .5*amp).reshape(self.n, self.nlon).mean(1); psat = float(rt.p_sat_co2(float(Tz.min())))/1e5
         pa = float((max(pc, 1e-12)**-4 + max(psat, 1e-12)**-4)**-.25)
         self.p_atm, self.co2_ice = pa, max(pc - pa, 0.)
+        return pa
+    def _co2_frost(self, pc, T, amp):
+        """'frost': annual-mean cold trap (latent-heat-pinned caps) + seasonal frost-exchange diagnostic."""
+        Tz = T.reshape(self.n, self.nlon).mean(1); az = amp.reshape(self.n, self.nlon).mean(1)
+        psat = float(rt.p_sat_co2(float(Tz.min())))/1e5
+        pa = float((max(pc, 1e-12)**-4 + max(psat, 1e-12)**-4)**-.25)
+        self.p_atm, self.co2_ice = pa, max(pc - pa, 0.)
+        # winter-half energy deficit where the band dips below T_sat(p_atm): mass condensed per m^2 per season (kg m^-2)
+        Ts = float(rt.T_sat_co2(pa*1e5)); Cs = float(np.mean(self.C)); om = 2*np.pi/max(self.P_orb, 1e-3)
+        dT = np.clip(Ts - (Tz - az), 0., None); B = 4*SIGMA*np.maximum(Tz, 100.)**3
+        m_frost = (B + Cs*om)*dT*(self.P_orb*3.156e7/np.pi)/L_CO2_SUB        # J m^-2 per season / L_s
+        w = np.full(self.n, 1./self.n); frac = float((w*(dT > 0)).sum())
+        self.frost = dict(cap_kg_m2=float(m_frost.max()), cap_frac=frac, T_sat=Ts,
+                          p_season_bar=float(min((w*m_frost).sum()*self.g/1e5, pa)))
         return pa
     def _orbit(self, h, t):
         if self.orbit is not None: return self.orbit.at(t)
@@ -249,7 +295,7 @@ class GCM2D:
         du = rt.o3_du_from_o2(self.x_o2); du = 0. if du < 3 else float(round(10**(round(np.log10(du)*4)/4), 1))
         ch4 = float(10**(round(np.log10(max(self.x_ch4, 1e-7))*2)/2))
         te = float(round(self._teff(hw), -2))
-        return rt.climate_tables(self.g, te, ch4, du, self.ps)
+        return rt.climate_tables(self.g, te, ch4, du, self.ps, self.x_h2) if self.x_h2 else rt.climate_tables(self.g, te, ch4, du, self.ps)
 
     # ---- physics pieces (cell arrays, flattened) ----
     def ice_of(self, T, amp): return 1/(1 + np.exp((T + .3*amp - T_ICE)/ICE_W))
@@ -341,6 +387,7 @@ class GCM2D:
         amp = self.last.get("amp_g"); amp = np.zeros(self.N) if amp is None or deep_eq and False else amp
         if amp is None or len(amp) != self.N: amp = np.zeros(self.N)
         ocf = self.oc_m.ravel(); ph = self.physics
+        if "dynamics" in ph: self._dynamics(T)
         if "winds" in ph: self._Adv = WIND_EFF*C_ATM*self._winds(T); self._set_L()
         ad = self.last.get("diurnal_g"); ad = np.zeros(self.N) if ad is None or len(ad) != self.N else ad
         for it in range(k):
@@ -377,6 +424,10 @@ class GCM2D:
         if "diurnal" in ph: self.last.update(diurnal_g=ad, amp_season_g=amp_seas, diurnal_mean_K=float(ad.mean()))
         if "clouds" in ph: self.last.update(clw_mean=float(self.clw.mean()))
         if "winds" in ph: self.last.update(U_band=self.U.copy(), phi_H_deg=float(np.degrees(self.phi_H)))
+        if "dynamics" in ph: self.last.update(dyn_D_mean=float(np.mean(self.dyn)), dyn_D_minmax=(float(self.dyn.min()), float(self.dyn.max())))
+        if "frost" in ph and getattr(self, "frost", None): self.last.update(frost=dict(self.frost))
+        if self.buffer or getattr(self, "buffer_auto", False):
+            self.last["buffer"] = dict(mode=self.buffer or "none", ps_n2_bar=self.ps, x_h2=self.x_h2, auto=bool(getattr(self, "buffer_auto", False)))
         return self.T
 
     def step(self, h, hw, LP=None, dt_w_yr=1., stress=None, t=None):
@@ -418,8 +469,9 @@ class GCM2D:
                       pCO2_atm_bar=None if self.p_atm is None else float(self.p_atm), co2_ice_bar=float(self.co2_ice), transport_f=float(self.f_D),
                       runaway=bool(asr > lim and self.ocean > .05), runaway_limit=lim, moist_greenhouse=bool(float(Tg.max()) > rt.T_MOIST_GH))
         if self.physics:                                      # optional-physics diagnostics (absent by default -> packets unchanged)
-            st.update({k: self.last[k] for k in ("diurnal_mean_K", "clw_mean", "phi_H_deg") if k in self.last},
+            st.update({k: self.last[k] for k in ("diurnal_mean_K", "clw_mean", "phi_H_deg", "dyn_D_mean", "frost") if k in self.last},
                       gcm_physics=sorted(self.physics))
+        if "buffer" in self.last: st.update(rt_buffer=dict(self.last["buffer"]))
         if dT_imp:
             Tc = self.Tg.ravel(); wc = .5*(wf(Tc - amp) + wf(Tc + amp)); wc = np.where(self.landm.ravel(), wc*self.moist.ravel(), wc)
             st["water_chronic"] = float(wc.mean()); st["lat_water_chronic"] = [round(float(v), 4) for v in wc.reshape(self.n, self.nlon).mean(1)]
@@ -427,18 +479,33 @@ class GCM2D:
 
 RH_MIN = .05
 # optional GCM2D physics (physics=("clouds", "diurnal", "winds") / --gcm-physics); off by default
-GCM_PHYSICS = ("clouds", "diurnal", "winds")
+GCM_PHYSICS = ("clouds", "diurnal", "winds", "dynamics", "frost")
+DYN_N, DYN_MIN, DYN_MAX = 1., .3, 3.
+DYN_GRAD_EARTH = 40./(np.pi/2*6.371e6)        # K m^-1, Earth's equator-pole zonal-mean gradient (~40 K over 10^4 km)
+L_CO2_SUB = 5.9e5                              # J kg^-1 CO2 sublimation
+N2_BUFFER_BAR, X_H2_BUFFER = 3., .1            # --rt-buffer n2: N2 column (bar); h2: + 10 % H2
 CLW_TAU, CLW_REF, CLW_F = .011, .05, .06      # yr condensate lifetime (~4 d); kg m^-2 source scale; cover e-fold path
 C_DIURNAL = (.016, .16)                        # W yr m^-2 K^-1 diurnal skin: land (~10 K swing on Earth), ocean (~1 K)
 HADLEY_K = 1.5; RAYLEIGH_D = 5.; PHI_H_EARTH = .5047               # Hadley transport boost inside phi_H; Rayleigh friction time (days)
 C_ATM, WIND_EFF, WIND_Q = .32, .1, .3          # column heat capacity (W yr m^-2 K^-1); BL share for heat; moisture share
+def parse_buffer(spec):
+    """'n2' | 'n2:<bar>' | 'h2' | 'h2:<bar>:<x_h2>' | None -> (ps background bar, x_h2)."""
+    if not spec: return 1., 0.
+    p = str(spec).split(":"); k = p[0]
+    try:
+        if k == "n2" and len(p) <= 2: return (float(p[1]) if len(p) > 1 else N2_BUFFER_BAR), 0.
+        if k == "h2" and len(p) <= 3: return (float(p[1]) if len(p) > 1 else N2_BUFFER_BAR), (float(p[2]) if len(p) > 2 else X_H2_BUFFER)
+    except ValueError: pass
+    raise ValueError(f"buffer must be n2[:bar] | h2[:bar[:x_h2]] | auto, got {spec!r}")
+
 def parse_physics(p):
     if not p: return frozenset()
     if isinstance(p, str): p = [x.strip() for x in p.split(",") if x.strip()]
-    p = set(GCM_PHYSICS) if "all" in p else set(p)
+    p = set(GCM_PHYSICS[:3]) | (set(p) - {"all"}) if "all" in p else set(p)    # 'all' = the original three (+ any named extra)
     bad = p - set(GCM_PHYSICS)
     if bad: raise ValueError(f"unknown gcm2d physics {sorted(bad)}; choose from {GCM_PHYSICS} or 'all'")
     return frozenset(p)
+AUTO_BUFFERS = (None, "n2", "h2", "h2:10:0.3", "h2:30:0.5")   # --rt-buffer auto ladder (cached equilibria)
 D_P_MAX = 10.         # cap on the pressure scaling of atmospheric heat transport (RT path)
 RT_CLOUD_K = 2.0
 
@@ -461,12 +528,22 @@ class GCMCarbon(bgc_mod.CarbonCycle):
 
 _EQ_CACHE = {}
 
-def init_gcm2d(h, hw, LP=None, orbit=None, rt_on=False, nlon=N_LON, warm_branch=True, physics=()):
-    """(GCM2D, GCMCarbon) at the carbon-silicate equilibrium (cached)."""
-    P = as_bus(LP); g = GCM2D(h, P, hw, nlon=nlon, orbit=orbit, rt_on=rt_on, spinup=False, physics=physics); cc = GCMCarbon(h, g, P)
+def init_gcm2d(h, hw, LP=None, orbit=None, rt_on=False, nlon=N_LON, warm_branch=True, physics=(), buffer=None):
+    """(GCM2D, GCMCarbon) at the carbon-silicate equilibrium (cached).  buffer (RT only): None|"n2[:bar]"|"h2[:bar[:x_h2]]"|"auto"."""
+    if buffer == "auto" and rt_on:
+        best = None
+        for b in AUTO_BUFFERS:                       # first non-snowball rung, else the warmest (mean T) rung
+            g, cc = init_gcm2d(h, hw, LP, orbit, rt_on, nlon, warm_branch, physics, b)
+            if float(np.mean(g.last["ice"])) <= SNOW_ICE: best = None; break
+            if best is None or float(np.mean(g.Tg)) > best[0]: best = (float(np.mean(g.Tg)), b)
+        if best is not None and best[1] != b: g, cc = init_gcm2d(h, hw, LP, orbit, rt_on, nlon, warm_branch, physics, best[1])
+        g.buffer_auto = True; g.last["buffer"] = dict(mode=g.buffer or "none", ps_n2_bar=g.ps, x_h2=g.x_h2, auto=True)
+        return g, cc
+    if buffer and not rt_on: raise ValueError("buffer needs rt_on=True")
+    P = as_bus(LP); g = GCM2D(h, P, hw, nlon=nlon, orbit=orbit, rt_on=rt_on, spinup=False, physics=physics, buffer=buffer); cc = GCMCarbon(h, g, P)
     key = (round(h.a, 9), round(h.e, 9), round(h.tilt, 9), round(h.spin, 9), h.ptype, round(h.volatiles, 9), round(h.m, 12), getattr(h, "planet_id", 0),
            round(float(getattr(hw, "L_star", h.L_star)), 9), tuple(round(P[k], 9) for k in ("greenhouse_K", "albedo_mult", "lat_diffusion", "co2_sens_K", "snowball_K", "runaway_K")),
-           None if orbit is None else orbit.key(), bool(rt_on), nlon, bool(warm_branch), "g3", rt.phys_key() if rt_on else None, tuple(sorted(g.physics)))
+           None if orbit is None else orbit.key(), bool(rt_on), nlon, bool(warm_branch), "g3", rt.phys_key() if rt_on else None, tuple(sorted(g.physics))) + ((buffer,) if buffer else ())
     if key in _EQ_CACHE:
         cc.C_atm, T, Td, mo, g.limit_cycle = _EQ_CACHE[key]; g.Tg, g.Tdg, g.moist = T.copy(), Td.copy(), mo.copy()
         g.pCO2 = cc.pCO2(P_REF); g.integrate(h, hw, P, 1., 0.)

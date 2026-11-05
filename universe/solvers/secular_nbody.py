@@ -31,6 +31,19 @@ tides=True (opt-in; solvers["orbit_tides"] = "on" | "moon"): constant-time-lag e
     (da_m/dt = 2 T sqrt(a_m/(G(m+M_m)))/M_m; Earth-Moon today: 4.5e16 N m, 3.8 cm/yr), and the satellite share of the
     spin-axis precession scales as M_m/a_m^3 (lunar/solar = 2.17 for Earth).  Without moon=True alpha keeps the leaf's
     Earth-Moon calibration (tides then only scale it with omega).
+    N-body + moon (default for orbit_tides="moon"; "moon-ring" keeps the ring model): each satellite is a massive
+    particle.  The WH particle is the planet+moon barycentre (mass m + M_m); the planet-moon relative vector rho is
+    integrated with its own Kepler drift (mu = G(m+M_m)) sub-cycled at P_moon/MOON_SUB inside every planetary step, with
+    the star's differential (tidal) pull  -G M* (r_m/|r_m|^3 - r_p/|r_p|^3)  as the kick (barycentre linearly
+    interpolated across the step).  The spin then precesses about the planet's orbit normal (solar share alpha/(1+lam0)
+    times omega/omega0) AND about the moon's own instantaneous orbit normal (lunar share x lam(a_m)), so the moon's
+    nodal regression (18.6 yr for Earth) and inclination enter the obliquity directly.  Tidal migration of a_m (Tides)
+    rescales rho, v_rho (shape preserved).  Not included: planet-planet forces on the moon, moon back-reaction on the
+    barycentre beyond the point-mass sum, planet J2 on the moon orbit (Laplace plane).
+    Secular + tides: Gamma_e is re-evaluated from the evolving spin rate and obliquity every GAM_DT yr (piecewise
+    eigen-solution with z continuous at each re-evaluation), no longer frozen at t = 0.
+    horizon (solvers["nbody_kyr"], CLI --nbody-kyr): N-body window before the LL hand-over (default 20 kyr) and the
+    MEGNO window reported for the system (megno(t_end) on a copy).
 LL-linear vs N-body chaos: SecularSystem is quasi-periodic by construction (a sum of eigenmodes; no resonances, no
     diffusion, MEGNO would be exactly 2); NBodySystem captures mean-motion resonances, secular chaos and close encounters
     (MEGNO > 2) but only up to `horizon` years, after which every driver continues on the LL solution.  Long-term chaotic
@@ -52,6 +65,8 @@ C_AUYR = 63241.077          # speed of light, AU/yr
 P_PREC0 = 25800.            # yr, spin-axis precession at Earth spin (same calibration as the leaf)
 SIGMA_I = np.radians(1.5)   # Rayleigh scale of initial mutual inclinations
 HORIZON = 20000.            # yr of N-body integration before handing over to the secular driver
+MOON_SUB = 12               # moon sub-steps per moon period (N-body moon particles)
+GAM_DT = 500.               # yr between tidal Gamma_e re-evaluations (secular + tides)
 REC_DT = .5                 # yr between stored samples
 
 
@@ -203,11 +218,18 @@ def _moon_arg(moon, N):
 # ---------------------------------------------------------------- N-body (WH, DH coordinates)
 class NBodySystem:
     """Shared integrator for one stellar system; drivers(...) gives per-planet driver objects."""
-    def __init__(self, a, m, M_star, tilt, spin=None, seed=0, e_init=None, gr=True, dt=None, horizon=HORIZON, rec_dt=REC_DT, tides=False, moon=None):
-        a = np.asarray(a, float); m = np.asarray(m, float); N = len(a); self.N = N; self.M = float(M_star); self.m = m
+    def __init__(self, a, m, M_star, tilt, spin=None, seed=0, e_init=None, gr=True, dt=None, horizon=HORIZON, rec_dt=REC_DT, tides=False, moon=None,
+                 moon_bodies=False):
+        a = np.asarray(a, float); m = np.asarray(m, float); N = len(a); self.N = N; self.M = float(M_star); m_pl = m
         self.sig = (N, round(float(M_star), 9), tuple(np.round(a, 9)), tuple(np.round(np.abs(tilt), 9)), int(seed))
         moon = _moon_arg(moon, N); self.tides = Tides(a, m, M_star, spin, moon) if tides else None
         if tides: self.sig = self.sig + ("tides", moon is not None)
+        self.mb = bool(moon_bodies and moon is not None)
+        if self.mb:
+            if not tides: raise ValueError("moon_bodies needs tides=True (moon state lives in Tides)")
+            self.sig = self.sig + ("moonp",); m = m + np.asarray(moon[0], float)
+        if horizon != HORIZON: self.sig = self.sig + (("hz", float(horizon)),)
+        self.m = m
         e0, inc, Om, w, M0, tilt, phs = _initial(a, m, M_star, tilt, seed, e_init)
         self.mu = G*self.M*np.ones(N)                    # DH Kepler part uses the star's mass only
         x, vh = elements_to_xv(G*(self.M + m), a, e0, inc, Om, w, M0)
@@ -217,11 +239,50 @@ class NBodySystem:
         self.gr = bool(gr); self.t = 0.; self.horizon = float(horizon); self.rec_dt = float(rec_dt)
         self.alpha = prec_const(a, M_star, spin)
         ev, nrm, _ = xv_to_evec(G*(self.M + m), x, vh); self.s = _spin0(nrm, tilt, phs)
+        if self.mb: self._moon_init(m_pl, moon, nrm, seed)
         self.rec_t = [0.]; self.rec = [self._sample()]
-        self.fallback = SecularSystem(a, m, M_star, tilt, spin, seed, e_init, tides=tides, moon=moon)
+        self.fallback = SecularSystem(a, m_pl, M_star, tilt, spin, seed, e_init, tides=tides, moon=moon)
         self.E0 = self.energy()
 
     def vhelio(self): return self.v + (self.m[:, None]*self.v).sum(0)/self.M
+
+    # ---- moon particles (relative planet-moon orbit; see module doc)
+    def _moon_init(self, m_pl, moon, nrm, seed):
+        self.m_pl = np.asarray(m_pl, float); self.mm = np.asarray(moon[0], float); self.mu_m = G*(self.m_pl + self.mm)
+        rng = np.random.default_rng([int(seed), 4411]); N = self.N
+        inc = np.radians(5.)*np.ones(N); Om = rng.uniform(0, 2*np.pi, N); w = rng.uniform(0, 2*np.pi, N); M0 = rng.uniform(0, 2*np.pi, N)
+        rho, u = elements_to_xv(self.mu_m, self.tides.am, np.full(N, .05), inc, Om, w, M0)
+        # rotate from the ecliptic frame into each planet's orbit frame (z -> orbit normal)
+        R = [self._frame(n) for n in nrm]
+        self.rho = np.array([R[i] @ rho[i] for i in range(N)]); self.u = np.array([R[i] @ u[i] for i in range(N)])
+        self.am_ref = self.tides.am.copy()
+    @staticmethod
+    def _frame(n):
+        n = n/np.linalg.norm(n); t = np.cross([0., 0., 1.], n); st = np.linalg.norm(t)
+        if st < 1e-12: return np.eye(3)
+        t /= st; ct = n[2]; K = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]])
+        return np.eye(3) + st*K + (1 - ct)*K @ K
+    def _moon_acc(self, X, rho):
+        fm = (self.mm/(self.m_pl + self.mm))[:, None]; fp = 1 - fm
+        rp = X - fm*rho; rm = X + fp*rho
+        return -G*self.M*(rm/((rm*rm).sum(1)**1.5)[:, None] - rp/((rp*rp).sum(1)**1.5)[:, None])
+    def _moon_step(self, X0, X1, h):
+        Pm = np.min(2*np.pi*np.sqrt(self.tides.am**3/self.mu_m)); k = int(max(np.ceil(h/(Pm/MOON_SUB)), 1)); hs = h/k   # shortest moon period sets the sub-step
+        rho, u = self.rho, self.u
+        for j in range(k):
+            Xa = X0 + (X1 - X0)*(j + .5)/k
+            u = u + .5*hs*self._moon_acc(Xa, rho); rho, u = kepler_drift(self.mu_m, rho, u, hs); u = u + .5*hs*self._moon_acc(Xa, rho)
+        self.rho, self.u = rho, u
+    def _moon_rescale(self):
+        f = self.tides.am/self.am_ref
+        if np.any(np.abs(f - 1) > 1e-9): self.rho = self.rho*f[:, None]; self.u = self.u/np.sqrt(f)[:, None]; self.am_ref = self.tides.am.copy()
+    def moon_normal(self):
+        L = np.cross(self.rho, self.u); return L/np.linalg.norm(L, axis=1)[:, None]
+    def moon_state(self):
+        """Osculating planetocentric moon elements (a in AU, e, inclination to the planet's orbit plane in deg)."""
+        ev, nm, _ = xv_to_evec(self.mu_m, self.rho, self.u); _, nrm, _ = xv_to_evec(G*(self.M + self.m), self.x, self.vhelio())
+        r = np.linalg.norm(self.rho, axis=1); v2 = (self.u*self.u).sum(1); a = 1/(2/r - v2/self.mu_m)
+        return dict(a=a, e=np.linalg.norm(ev, axis=1), inc_deg=np.degrees(np.arccos(np.clip((nm*nrm).sum(1), -1, 1))))
 
     def _sample(self):
         ev, nrm, _ = xv_to_evec(G*(self.M + self.m), self.x, self.vhelio())
@@ -253,12 +314,19 @@ class NBodySystem:
     def advance(self, t_to, spin=True):
         t_to = min(float(t_to), self.horizon); nxt = self.rec_t[-1] + self.rec_dt
         while self.t < t_to - 1e-12:
-            h = self.dt; self._step(h); self.t += h
+            h = self.dt; X0 = self.x; self._step(h); self.t += h
+            if self.mb: self._moon_step(X0, self.x, h)
             if spin:
                 ev, nrm, _ = xv_to_evec(G*(self.M + self.m), self.x, self.vhelio())
-                al = self.alpha if self.tides is None else self.alpha*self.tides.alpha_fac()
-                self.s = _spin_rotate(self.s, nrm, -al*(self.s*nrm).sum(1)*h)
+                if self.mb:                                                  # solar share about n, lunar share about the moon's own normal
+                    T = self.tides; a_sun = self.alpha/(1 + T.lam0)*(T.w/T.w0)
+                    self.s = _spin_rotate(self.s, nrm, -a_sun*(self.s*nrm).sum(1)*h)
+                    nmn = self.moon_normal(); self.s = _spin_rotate(self.s, nmn, -a_sun*T.lam()*(self.s*nmn).sum(1)*h)
+                else:
+                    al = self.alpha if self.tides is None else self.alpha*self.tides.alpha_fac()
+                    self.s = _spin_rotate(self.s, nrm, -al*(self.s*nrm).sum(1)*h)
                 if self.tides is not None: self.s = self.tides.step(h, self.s, nrm, np.linalg.norm(ev, axis=1))
+                if self.mb: self._moon_rescale()
                 self.s /= np.linalg.norm(self.s, axis=1)[:, None]
             if self.t >= nxt: self.rec_t.append(self.t); self.rec.append(self._sample()); nxt += self.rec_dt
 
@@ -310,16 +378,27 @@ class SecularSystem:
                 A[j, j] += c*b1; A[j, k] = -c*_laplace_b(1.5, 2, al); B[j, j] -= c*b1; B[j, k] = c*b1
             if gr: A[j, j] += 3*(G*M_star)**1.5/(C_AUYR**2*a[j]**2.5*(1 - e0[j]**2))
         self.A, self.B = A, B
+        self.A0 = A
         if self.tides is not None:                                        # tidal e-damping: dz/dt = i A z - Gamma z
             self.Gam = self.tides.gamma_e(np.cos(np.abs(np.asarray(tilt, float)))); A = A + 1j*np.diag(self.Gam)
         self.gA, self.VA = np.linalg.eig(A); self.gB, self.VB = np.linalg.eig(B)
         z0 = e0*np.exp(1j*(Om + w)); zeta0 = np.sin(inc)*np.exp(1j*Om)
         self.cA = np.linalg.solve(self.VA, z0); self.cB = np.linalg.solve(self.VB, zeta0)
+        self.segA = [(0., self.gA, self.VA, self.cA, self.Gam.copy())] if self.tides is not None else None   # piecewise e-modes
         self.alpha = prec_const(a, M_star, spin)
         self.dt_spin = float(dt_spin); self.ts = [0.]; self.s = [_spin0(self._normal(0.), tilt, phs)]; self.al = [self.alpha]
         self.g = np.real(self.gA)
 
-    def _ez(self, t): return (self.VA*(self.cA*np.exp(1j*self.gA*t))).sum(1)
+    def _ez(self, t):
+        if self.segA is None: return (self.VA*(self.cA*np.exp(1j*self.gA*t))).sum(1)
+        k = max(int(np.searchsorted([s[0] for s in self.segA], t, side="right")) - 1, 0); t0, gA, VA, cA, _ = self.segA[k]
+        return (VA*(cA*np.exp(1j*gA*(t - t0)))).sum(1)
+    def _regam(self, t, s, nrm):
+        """Re-evaluate Gamma_e from the current spin/obliquity; start a new eigen-segment if it moved > 1 %."""
+        G_new = self.tides.gamma_e(np.clip((s*nrm).sum(1), -1, 1)); G_old = self.segA[-1][4]
+        if np.max(np.abs(G_new - G_old)/np.maximum(np.abs(G_old), 1e-30)) < .01: return
+        z = self._ez(t); gA, VA = np.linalg.eig(self.A0 + 1j*np.diag(G_new))
+        self.segA.append((float(t), gA, VA, np.linalg.solve(VA, z), G_new.copy())); self.Gam = G_new
     def _normal(self, t):
         zeta = (self.VB*(self.cB*np.exp(1j*self.gB*t))).sum(1); si = np.clip(np.abs(zeta), 0, .999); Om = np.angle(zeta); ci = np.sqrt(1 - si*si)
         return np.stack([si*np.sin(Om), -si*np.cos(Om), ci], 1)
@@ -336,6 +415,7 @@ class SecularSystem:
             s = _spin_rotate(s, nm, -al*(s*nm).sum(1)*h); s /= np.linalg.norm(s, axis=1)[:, None]
             if self.tides is not None:
                 s = self.tides.step(h, s, nm, np.abs(self._ez(t0 + .5*h))); al = self.alpha*self.tides.alpha_fac()
+                if (t0 + h) // GAM_DT > t0 // GAM_DT: self._regam(t0 + h, s, self._normal(t0 + h))
             self.ts.append(t0 + h); self.s.append(s); self.al.append(al)
         k = int(np.searchsorted(self.ts, t)); k = min(max(k, 0), len(self.ts) - 1)
         if k > 0 and self.ts[k] > t:                                      # partial step from the previous sample
@@ -344,7 +424,7 @@ class SecularSystem:
         return self.s[k]
 
     def at(self, idx, t):
-        t = max(float(t), 0.); ev, n = self._evec(t); s = self._spin_to(t)
+        t = max(float(t), 0.); s = self._spin_to(t); ev, n = self._evec(t)     # spin first: it advances the tidal e-segments
         obl, var, e = _climatic(s, n, ev)
         return dict(e=float(e[idx]), varpi=float(var[idx]), obliquity=float(obl[idx]))
 
@@ -368,8 +448,9 @@ def tide_kw(mode):
     "moon" -> tides + each planet's largest system moon (Earth-like Moon if it has none)."""
     if not mode: return {}
     if mode in (True, "on", "tides"): return dict(tides=True)
-    if mode == "moon": return dict(tides=True, moon="system")
-    raise ValueError(f"orbit_tides must be on|moon, got {mode!r}")
+    if mode == "moon": return dict(tides=True, moon="system")              # N-body: moon particles (moon_bodies default)
+    if mode == "moon-ring": return dict(tides=True, moon="system", moon_bodies=False)
+    raise ValueError(f"orbit_tides must be on|moon|moon-ring, got {mode!r}")
 
 
 def drivers_from_system(S, habs, seed, solver="secular", **kw):
@@ -380,7 +461,10 @@ def drivers_from_system(S, habs, seed, solver="secular", **kw):
     if not habs: return {}
     a = [h.a for h in habs]; m = [h.m for h in habs]; tilt = [h.tilt for h in habs]; spin = [h.spin for h in habs]; e = [h.e for h in habs]
     if kw.get("moon") == "system": kw["moon"] = system_moons(S, habs)
-    if solver == "nbody": return NBodySystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
+    if solver == "nbody":
+        if kw.get("moon") is not None: kw.setdefault("moon_bodies", True)
+        return NBodySystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
+    kw.pop("moon_bodies", None); kw.pop("horizon", None)
     if solver == "secular": return SecularSystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
     raise ValueError(f"orbit_solver must be nbody|secular|off, got {solver!r}")
 

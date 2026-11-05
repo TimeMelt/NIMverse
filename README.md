@@ -445,14 +445,16 @@ biomass .871 at T 267.0 K. Flags are shared by `run_life`, `run_life_live`, and 
 | flag | module | replaces |
 |---|---|---|
 | `--climate-model gcm2d` | `solvers.climate2d` | `leaves.world.LatClimate`: a 24 lat × 36 lon equal-area EBM with continents, ocean deep layer, frequency-domain seasons, diffusion-decay hydrology, and land-only weathering (`GCMCarbon`); with `--rt` the transport uses Williams–Kasting D ∝ p·cp/m² |
-| `--gcm-physics clouds,diurnal,winds\|all` (needs gcm2d) | `solvers.climate2d` | prognostic cloud condensate (source/sink budget → cloud fraction, fed to RT/albedo), a diurnal-cycle harmonic (rotation-scaled amplitude), and simple winds (Held–Hou Hadley edge + conservative upwind zonal advection). Off by default |
+| `--gcm-physics clouds,diurnal,winds,dynamics,frost\|all` (needs gcm2d) | `solvers.climate2d` | prognostic cloud condensate (source/sink budget → cloud fraction, fed to RT/albedo), a diurnal-cycle harmonic (rotation-scaled amplitude), and simple winds (Held–Hou Hadley edge + conservative upwind zonal advection). `dynamics`: baroclinic-eddy diffusivity D ∝ \|∂T/∂y\| (Stone/Held closure, flux form, conservative). `frost`: CO2-frost caps on cells below the frost point (albedo + latent buffer). `all` = the first three (unchanged meaning). Off by default |
+| `--rt-buffer n2[:bar]\|h2[:bar[:x_h2]]\|auto` (needs `--rt`) | `solvers.rt` / `climate2d` | background gas for the RT column: `n2` 3 bar N2, `h2` 3 bar with 10% H2 and N2–H2 CIA (Wordsworth & Pierrehumbert 2013), explicit `h2:30:0.5` etc.; `auto` tries none → n2 → h2 → h2:10:0.3 → h2:30:0.5 and keeps the first non-snowball rung, else the warmest |
 | `--rt` (needs gcm2d) | `solvers.rt` | greenhouse-offset OLR/albedo: 11-band LW k-distribution two-stream (H2O lines + continuum, CO2, CH4, O3) plus 4-band delta-Eddington SW with adding; CO2–CO2 / N2–N2 / CO2–H2 CIA, CO2 condensation (frost-point profile, CO2-ice clouds, surface-ice collapse/maximum greenhouse), CO2-mixture adiabat, Simpson–Nakajima runaway limit; RCE; cached OLR/albedo tables fed CO2/CH4/O2→O3 from biogeochem |
-| `--foodweb [guild\|species]` | `solvers.foodweb` | `leaves.biosphere.step`: `guild` (default) = mass-conserving Nut/Det + producers/herbivores/carnivores/apex/decomposers ODE (Monod, Beddington–DeAngelis); `species` = N-species size spectrum (body-mass traits, thermal niches, allometric rates, size-ratio predation kernel), same pools and API |
+| `--foodweb [guild\|species\|species-div]` | `solvers.foodweb` | `leaves.biosphere.step`: `guild` (default) = mass-conserving Nut/Det + producers/herbivores/carnivores/apex/decomposers ODE (Monod, Beddington–DeAngelis); `species` = N-species size spectrum (body-mass traits, thermal niches, allometric rates, size-ratio predation kernel), same pools and API; `species-div` adds niche packing of producer T_opt across the band climate (MacArthur–Levins), immigration rain from Nut, Chesson-style stabilising self-limitation (→ Det, mass-conserving) and Lande T_opt evolution (≤ 1 K/step) |
 | `--orbit-solver nbody\|secular\|off` | `solvers.secular_nbody` | leaf `SecularOrbit`: Wisdom–Holman N-body (1PN, MEGNO) for 20 kyr, then full Laplace–Lagrange e+i theory; spin axis from Colombo's top against the true orbit normal (obliquity, climatic precession) |
-| `--orbit-tides on\|moon` (needs nbody/secular) | `solvers.secular_nbody.Tides` | constant-time-lag tides (Hut 1981 / Leconte+2010; k2 .3, Δt 600 s): spin-down toward pseudo-synchronous, obliquity erosion, e damping (secular: LL A + iΓ). `moon` adds the system's largest moon (or an Earth-like Moon) torque: moon recession, and the moon's share of the precession constant |
-| `--stellar-solver` | `solvers.stellar_track` | `leaves.stellar.track` power laws: Hayashi/Henyey pre-MS contraction → ODE MS burn (homology μ⁴, faint young Sun) → subgiant → RGB (core-mass–luminosity, Reimers) → HB/clump → AGB with thermal-pulse-lite (Paczyński L–Mc, Blöcker superwind) → WD Mestel cooling; `solve_track(M, Z)` scales L, R, X0 with metallicity |
-| config/EP `"gr_solver": true\|"dynamics"` | `solvers.gr` | `true`: `gr_*` fields on TDE/quasar/merger log entries in `events.run_events` (Kerr ISCO/photon/horizon, η, capture flag, ISCO GW frequency, chirp mass, remnant mass/spin + l=m=2 ringdown f/τ). `"dynamics"`: also a Kerr-ISCO-matched Paczyński–Wiita SMBH pull and Kerr capture radius. With `true` the dynamics and RNG are unchanged |
-| config `"cosmo_drive": {"z_start": z}` | `sim2.leapfrog_cosmo` | `sim2.simulate` integrates in comoving coordinates (GADGET-style KDK, kick ∫dt/a, drift ∫dt/a², +4πGρ_m x/3 background term) on the ΛCDM a(t) of `leaves.cosmology`; frames are returned in physical coordinates and `Gx["cosmo"]` records a(t). Default off |
+| `--orbit-tides on\|moon\|moon-ring` (needs nbody/secular) | `solvers.secular_nbody.Tides` | constant-time-lag tides (Hut 1981 / Leconte+2010; k2 .3, Δt 600 s): spin-down toward pseudo-synchronous, obliquity erosion, e damping (secular: LL A + iΓ, with Γ re-evaluated every 500 yr from the evolving spin/obliquity, piecewise eigen-solution). `moon` adds the system's largest moon (or an Earth-like Moon): under `nbody` it is a massive particle (planet–moon relative orbit, Kepler drift sub-cycled at P_moon/12, stellar tidal kick), and the spin precesses about the moon's own orbit normal, so nodal regression enters the obliquity; `moon-ring` keeps the orbit-averaged torque model. Under `secular` both are the ring model |
+| `--nbody-kyr K`, `--megno-kyr K` (needs nbody) | `solvers.secular_nbody` | N-body window before the LL hand-over (default 20 kyr); MEGNO of the system over K kyr reported in the solver block |
+| `--stellar-solver [semi\|mesa_lite]`, `--stellar-z Z` | `solvers.stellar_track` | `leaves.stellar.track` power laws: Hayashi/Henyey pre-MS contraction → ODE MS burn (homology μ⁴, faint young Sun) → subgiant → RGB (core-mass–luminosity, Reimers) → HB/clump → AGB with thermal-pulse-lite (Paczyński L–Mc, Blöcker superwind) → WD Mestel cooling; `solve_track(M, Z)` scales L, R, X0 with metallicity. `mesa_lite`: pre-MS with deuterium burning and pre-ZAMS CN burning (Sun t_PMS ≈ 40 Myr), multi-zone MS burn (shell-resolved X/μ profile, convective core + overshoot proxy, fitted to the standard solar model), resolved core He flash (M < 2 Msun), TP-AGB third dredge-up (C/O, carbon stars) and hot-bottom burning, WD cooling with Debye heat capacity and crystallisation delay; cached (M, Z) grid; `--stellar-z` feeds Z to `HostWeather` |
+| config/EP `"gr_solver": true\|"dynamics"`, `"gr_pn": 3.5` | `solvers.gr` | `true`: `gr_*` fields on TDE/quasar/merger log entries in `events.run_events` (Kerr ISCO/photon/horizon, η, capture flag, ISCO GW frequency, chirp mass, remnant mass/spin + l=m=2 ringdown f/τ). `"dynamics"`: also a Kerr-ISCO-matched Paczyński–Wiita SMBH pull and Kerr capture radius. With `true` the dynamics and RNG are unchanged. `gr_pn` (0–3.5) adds TaylorT4 PN inspiral + PhenomA IMR tags (`gr_imr_f_merge_hz`, `gr_imr_f_ring_hz`, `gr_imr_cycles_inband`) on mergers. Library: `gr.pn_rates`, `inspiral_pn`, `pn_cycles`, `imr_tags`, `mpd_orbit` (Mathisson–Papapetrou–Dixon spinning particle in Schwarzschild, Tulczyjew SSC) |
+| config `"cosmo_drive": {"z_start": z}` | `sim2.leapfrog_cosmo` | `sim2.simulate` integrates in comoving coordinates (GADGET-style KDK, kick ∫dt/a, drift ∫dt/a², +4πGρ_m x/3 background term) on the ΛCDM a(t) of `leaves.cosmology`; frames are returned in physical coordinates and `Gx["cosmo"]` records a(t). The same config now also drives `events.run_events`: comoving KDK, events and frames in physical coordinates, log entries carry `z` and `t_cosmic_gyr`, info has `cosmo` {z_start, z_end}. Default off |
 
 API: `HabitatRun(..., climate_model="gcm2d", orbit=driver, solvers={...})` and `life_loop(..., climate_model, solvers=dict)`.
 Reports gain a `"solvers"` block (`HabitatRun.solver_report()`) only when solvers are on. gcm2d adds `grid_*` per-cell stressors.
@@ -460,7 +462,7 @@ Reports gain a `"solvers"` block (`HabitatRun.solver_report()`) only when solver
 stellar track, including `summary()["t_ms_Gyr"]`. The library also includes `gr.geodesic`, `gr.periastron_advance`, `gr.inspiral`,
 `rt.rce`, and `rt.radiation`.
 
-Fidelity (tested in `universe/solvers/test_solvers.py`, 24 tests incl. live checkpoint restore):
+Fidelity (tested in `universe/solvers/test_solvers.py`, 32 tests incl. live checkpoint restore):
 - rt: Earth column clear-sky OLR 272.7 W/m² at 288 K (target 265–273) with logarithmic CO2 forcing; CO2 frost point 194.7 K at
   1 bar and the triple point; CIA lowers OLR at fixed skin temperature; runaway limit 282 W/m² (Earth g), rising with g.
 - gcm2d: the transport and upwind wind operators have zero row and column sums, so energy is conserved; |TOA| < 5 W/m² at
@@ -476,26 +478,46 @@ Fidelity (tested in `universe/solvers/test_solvers.py`, 24 tests incl. live chec
   cools (Mestel), and low Z is brighter and shorter-lived.
 - cosmo_drive: an isolated bound pair integrated comoving from z = 2 keeps its physical orbit size to < 5% (it decouples from
   the Hubble flow) while a(t) advances.
+- rt buffers: `parse_buffer` round-trips; N2–H2 CIA lowers OLR (warms) at fixed T; `dynamics` keeps the operator conservative.
+- moons: the N-body moon particle keeps a_m, e_m bounded (incl. a seed-4 regression with mixed moon periods); evolving-Γ secular runs create ≥ 2 eigen-segments with continuous z.
+- PN: order 0 ≡ Peters; 3.5PN within 1% of Peters at 1e-3 AU; GW150914-like tags f_merge 80–200 Hz, f_ring 200–400 Hz. MPD:
+  energy and L_z conserved to 1e-9 / 1e-8; spin–orbit splits the circular Ω by sign of s; s = 0 reduces to the geodesic.
+- mesa_lite: Sun t_PMS ≈ 40 Myr, t_MS ≈ 10 Gyr, He flash, WD mass .55 Msun, crystallisation onset before t_end; grid and
+  direct solve agree.
+- species-div: mass conserved; at 240–250 K more species survive and Shannon diversity rises vs `species`.
+- events cosmo: default path deterministic with no z fields; from z = 2, z decreases monotonically and t_cosmic > 3 Gyr.
 - live mode: `LiveSim` with gcm2d+foodweb+secular+stellar solver restores from checkpoints deterministically.
 
-Gaps (honest leftovers):
-- **RT / gcm2d:** band-grey CIA, no line-by-line, no steam-atmosphere profile (runaway is a limit, not solved); no 3-D
-  dynamics or ocean GCM (winds are a Hadley-edge + zonal advection parameterisation, clouds a single condensate budget).
-  Seed-4 planet3 (pCO2 ≈ 25–30 bar on a cold orbit) now reaches ≈ 177–179 K under `--rt` instead of 121 K, but the leaf gives
-  246 K. The residual is physical in the RT path: at those pressures CO2 condenses (frost-point profile and surface ice cap
-  pCO2 near saturation), so the maximum-greenhouse limit applies, which the leaf's log-CO2 offset ignores. It still freezes.
-- **foodweb species:** one or two producer species tend to dominate (competitive exclusion within a thermal niche);
-  planet3 keeps biomass but its leaf individuals die out on the 3 kyr smoke.
-- **Orbits:** Laplace–Lagrange is linear in e and i (LL-linear: quasi-periodic, no chaos, no resonance overlap); the N-body
-  phase sees chaos (MEGNO) but only for 20 kyr and has no tidal e damping (tides act on spin there). Tidal Γ is frozen at the
-  initial spin/obliquity in the secular eigen-solve. Moons are a torque on spin, not N-body bodies.
-- **GR:** test-particle geodesics, 0PN Peters inspiral, fitted remnants; PW pull is a pseudo-Newtonian approximation.
-- **stellar:** still not MESA: one-zone MS, parametric pre-MS (Sun t_PMS ≈ 21.5 Myr vs ≈ 40 Myr in full models), lite thermal
-  pulses, no He flash. Z is a `solve_track(M, Z)` argument; `HostWeather` still uses solar Z. Only matters when
-  `stellar_evolve > 0`. Example: `{"stellar_evolve": 1, "stellar_age_rate": 2e6}` on seed 4 ages the 1.45 Msun host by 3 Gyr;
-  the leaf gives L 8.81 Lsun / t_MS 3.92 Gyr, the solver ~9.4 Lsun / 3.8 Gyr; life persists on planet2 and planet3.
-- **CosmoDrive:** only `sim2.simulate` (isolated region plus uniform background, no periodic box, no PM/perturbations);
-  `events.run_events` still runs in physical time.
+Gaps (honest leftovers). None of these modules is the reference code its name alludes to: `mesa_lite` is not MESA,
+gcm2d is not CESM (or any 3-D GCM), and the PN/IMR/MPD code is not numerical relativity (SpEC/SXS). They are self-contained
+numpy/scipy approximations sized for a toy universe.
+- **RT / gcm2d:** 11-band k-distribution (NG = 4) with band-grey CIA; no correlated-k overlap tables, no line-by-line, no
+  steam-atmosphere profile (runaway is a limit). 2-D (lat × lon) energy balance, not 3-D dynamics or an ocean GCM:
+  `dynamics` is a diffusive eddy closure, winds a Hadley-edge + zonal advection parameterisation, clouds a single condensate.
+- **Seed-4 planet3 under `--rt`** stays ≈ 177 K (leaf 246 K) and dies. This is physical in the RT path, and buffers do not fix
+  it: at 4.4 AU (S ≈ 314 W/m², ice albedo) ASR is only ≈ 23–34 W/m², below the CO2 maximum-greenhouse OLR floor. Extra N2/H2
+  *raises* low-T OLR (thicker column lifts the CO2-saturated emission level onto the warmer adiabat) and Rayleigh scattering
+  raises albedo, so CO2 collapses further (n2 → 168 K, h2 → 154 K; even 30 bar with 50% H2 reaches only ≈ 190 K in 1-D with
+  an ice surface). `--rt-buffer auto` therefore keeps no buffer there (177.3 K). The leaf's log-CO2 offset has no such floor.
+- **Seed-4 planet2** sits on a CO2 weathering limit cycle (snowball pCO2 ≈ .9 bar ↔ warm ≈ 1.5 bar) under `--rt` in every
+  configuration. `dynamics` shifts the equilibrium ≈ −3.6 K and the cycle phase, so at 3 kyr it is in the snowball phase
+  (dead, 246.7 K); `frost` alone changes nothing on planet2. This is the model's limit-cycle behaviour, not a bug.
+- **foodweb species-div:** the diversity mechanisms are phenomenological (constant immigration rate, fixed self-limitation
+  and trait variance), not an eco-evolutionary model with speciation. `species` alone still shows competitive exclusion.
+- **Orbits:** Laplace–Lagrange is linear in e and i (quasi-periodic, no chaos); the N-body phase sees chaos (MEGNO) only for
+  `--nbody-kyr`. Moon particles feel the star but not the other planets, there is no planetary J2 (no Laplace plane), and the
+  moon's back-reaction is the point-mass barycentre only, so Earth's nodal period is 17.9 yr, not 18.6. Under `secular`
+  moons remain the ring model; tidal e damping in the N-body phase acts on spin only.
+- **GR:** PN is quasi-circular TaylorT4 to 3.5PN, non-spinning, times the Peters eccentricity enhancement (no eccentric PN
+  enhancement functions); merger/ringdown are PhenomA fit tags, not waveforms or NR. MPD is linear in spin, Schwarzschild
+  only (no Kerr), with finite-differenced Riemann. Remnants are fits; the PW pull is pseudo-Newtonian.
+- **stellar:** `mesa_lite` solves no hydrostatic structure equations and has no opacity/EOS tables, nuclear network,
+  rotation or diffusion; burning is a linear X proxy, envelope radii are parametric, and flash, dredge-up and HBB are
+  calibrated events. Meaningful for 0.5–3 Msun. Only matters when `stellar_evolve > 0`. Example:
+  `{"stellar_evolve": 1, "stellar_age_rate": 2e6}` on seed 4 ages the 1.45 Msun host by 3 Gyr; the leaf gives L 8.81 Lsun /
+  t_MS 3.92 Gyr, `semi` ~9.4 Lsun / 3.8 Gyr.
+- **CosmoDrive:** background ΛCDM only (isolated region plus uniform background): no periodic box, no PM/perturbation growth,
+  in both `sim2.simulate` and `events.run_events`.
 
 Seed 4, 3000 yr (`python -m universe.smoke_physics15 --years 3000 [flags]`):
 
@@ -509,6 +531,12 @@ Seed 4, 3000 yr (`python -m universe.smoke_physics15 --years 3000 [flags]`):
 | `--foodweb species` | .42 / 267.0 K | .055 / 246.5 K (no individuals left) |
 | `--orbit-solver nbody` / `secular` | ≈.08 / 263.9 K | .17 / 246.5 K |
 | `--orbit-solver secular --orbit-tides moon` | .078 / 263.9 K (tides negligible over 3 kyr) | .17 / 246.5 K |
+| `--orbit-solver nbody --orbit-tides on` / `moon-ring` | .082 / 264.2 K / .080 / 264.2 K | .17 / 246.5 K |
+| `--orbit-solver nbody --orbit-tides moon` (moon particles) | .080 / 264.1 K | .17 / 246.5 K |
+| `--climate-model gcm2d --rt --rt-buffer n2` / `h2` | 1.87 / 292.7 K / 1.86 / 299.8 K | dead, 167.8 K / 154.2 K |
+| `--climate-model gcm2d --rt --rt-buffer auto` | 1.87 / 280.1 K (no-buffer rung) | dead, 177.3 K (warmest rung = none) |
+| `--climate-model gcm2d --rt --gcm-physics dynamics,frost` | dead, 246.7 K (limit-cycle snowball phase) | dead, 158.3 K |
+| `--foodweb species-div` | 9 species alive, Shannon 2.82 | .059 / 246.5 K, 8 alive, Shannon 4.20 (species: 2, 1.0) |
 
 The orbit-solver result is lower because planet1, drawn at 6° inclination, swings planet2's orbit plane. Obliquity rises from
 21° to 27° over 3 kyr, against a near-constant 18° in the leaf, and the cold planet drifts into a snowball regime. Earth-like
@@ -522,4 +550,7 @@ python -m universe.run_life_live --seed 4 --climate-model gcm2d
 python -m universe.smoke_physics15 --years 3000 --climate-model gcm2d --rt --gcm-physics all
 python -m universe.smoke_physics15 --years 3000 --foodweb species
 python -m universe.smoke_physics15 --years 3000 --orbit-solver secular --orbit-tides moon
+python -m universe.smoke_physics15 --years 3000 --orbit-solver nbody --orbit-tides moon --megno-kyr 2
+python -m universe.smoke_physics15 --years 3000 --climate-model gcm2d --rt --rt-buffer auto
+python -m universe.smoke_physics15 --years 3000 --foodweb species-div
 ```

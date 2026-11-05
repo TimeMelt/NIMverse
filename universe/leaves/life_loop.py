@@ -18,7 +18,16 @@ def host_weather(S, distance_pc=None, M_override=None, seed=None):
     hw = HostWeather.from_star(M, L, float(temp(M)), d)
     if S.get("age_Gyr") is not None: hw.age_prior_Gyr = float(S["age_Gyr"])
     elif seed is not None: hw.age_prior_Gyr = stellar.age_prior(M, seed)
+    if S.get("Z") is not None: hw.Z_star = float(S["Z"])                      # host metallicity (used only by solver tracks)
+    elif S.get("feh") is not None: hw.Z_star = float(.0142*10**float(S["feh"]))
     return hw
+
+def apply_stellar_solver(hw, sv):
+    """solvers["stellar_solver"] (True/"semi" | "mesa_lite") + optional solvers["stellar_Z"] -> hw.solver_track / Z_star."""
+    m = sv.get("stellar_solver")
+    if not m: return
+    hw.solver_track = m if isinstance(m, str) else "semi"
+    if sv.get("stellar_Z") is not None: hw.Z_star = float(sv["stellar_Z"])
 
 def sync_habitat(h, hw):
     """Live habitat snapshot from the (evolving) host: hz_in/out, L_star, irradiance (baseline L_star/a^2, flares excluded).
@@ -43,12 +52,12 @@ class HabitatRun:
         self.climate_model = climate_model; self.lat = self.carbon = self.bgc = None
         # out-of-leaf solvers (universe.solvers; all opt-in): rt, foodweb, stellar_solver (orbit_solver is applied in life_loop)
         self.solvers = sv = dict(solvers or {}); self.fw = None
-        if sv.get("stellar_solver"): self.hw.solver_track = "semi"
+        apply_stellar_solver(self.hw, sv)
         if climate_model == "lat":      # physics15: latitudinal EBM + carbon-silicate cycle (started at its weathering equilibrium)
             self.lat, self.carbon = biogeochem.init_climate(h, self.hw, P, orbit); self.bgc = biogeochem.Biogeochem(self.carbon)
         elif climate_model == "gcm2d":  # solvers.climate2d: lat x lon EBM-GCM (+ two-stream RT if sv["rt"]) + land-cell weathering
             from ..solvers import climate2d
-            self.lat, self.carbon = climate2d.init_gcm2d(h, self.hw, P, orbit, rt_on=bool(sv.get("rt")), physics=sv.get("gcm_physics") or ()); self.bgc = biogeochem.Biogeochem(self.carbon)
+            self.lat, self.carbon = climate2d.init_gcm2d(h, self.hw, P, orbit, rt_on=bool(sv.get("rt")), physics=sv.get("gcm_physics") or (), buffer=sv.get("rt_buffer")); self.bgc = biogeochem.Biogeochem(self.carbon)
         if sv.get("foodweb"):
             from ..solvers import foodweb; self.fw = foodweb.make(sv["foodweb"], seed=int(abs(h.a)*1e6) + 7*int(getattr(h, "planet_id", 0)))
         self.hist = world.ClimateHistory(n=4000); self.cu = culture_mod.Culture(); self.tstress = {}; self.peak = {}; self.n_imp = 0; self.impact_loss = 0.; self.k = 0
@@ -165,7 +174,13 @@ class HabitatRun:
         if self.climate_model == "gcm2d" and self.lat is not None:
             L = self.lat.last; d["gcm2d"] = dict(toa_imbalance=float(L.get("toa_imbalance", 0.)), rt=bool(self.lat.rt), co2_limit_cycle=bool(self.lat.limit_cycle),
                                                 pCO2_bar=float(self.lat.pCO2), x_o2=float(self.lat.x_o2), x_ch4=float(self.lat.x_ch4))
-        if self.hw.solver_track: d["stellar"] = dict(track=self.hw.solver_track, phase=self.hw.phase, age_Gyr=float(self.hw.age_Gyr), L=float(self.hw.L_star), T_eff=float(self.hw.T_eff))
+        if self.hw.solver_track:
+            d["stellar"] = dict(track=self.hw.solver_track, phase=self.hw.phase, age_Gyr=float(self.hw.age_Gyr), L=float(self.hw.L_star), T_eff=float(self.hw.T_eff))
+            if self.hw.solver_track == "mesa_lite":
+                from ..solvers import stellar_track as _st
+                Zs = _st.ZSUN if self.hw.Z_star < 0 else self.hw.Z_star; tk = _st.solve_track_ml(self.hw.M_star, Zs)
+                d["stellar"].update(Z=Zs, t_pms_Myr=tk["t_pms"]*1e3, t_ms_Gyr=tk["t_ms"], he_flash=tk["he_flash"], t_hb_Gyr=tk["t_hb"], C_O_final=tk["C_O"],
+                                    carbon_star=tk["carbon_star"], M_wd=tk["M_wd"], t_cryst_Gyr=tk["t_cryst"])
         return d
 
     def report(self):
@@ -205,21 +220,32 @@ def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, cultu
               emit_every=None, M_override=None, record=None, model="individuals", mind=None, climate_model="lat", secular=True, solvers=None):
     """climate_model="lat" (physics15 default): latitudinal EBM + carbon cycle (+ secular orbit drivers if `secular`); "box": v1 0-D;
     "gcm2d": universe.solvers.climate2d lat x lon EBM-GCM.  solvers (opt-in, universe.solvers): dict(rt=bool, foodweb=bool,
-    stellar_solver=bool, orbit_solver="nbody"|"secular"|"off"|None) -- None/{} keeps the leaf defaults bit-for-bit."""
+    stellar_solver=bool|"semi"|"mesa_lite", orbit_solver="nbody"|"secular"|"off"|None) -- None/{} keeps the leaf defaults bit-for-bit."""
     P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override, seed=seed)
     cat = ObserverCatalog(observers or [Observer("obs0", hw.distance_pc)])
     ee = emit_every or max(1, int(years/dt)//400)
     habs = habitats_from_system(S, seed, P); rep = []
     from .orbit_climate import drivers_from_system
     sv = dict(solvers or {}); osv = sv.get("orbit_solver")
-    if sv.get("stellar_solver"): hw.solver_track = "semi"
+    apply_stellar_solver(hw, sv)
     if osv and climate_model in ("lat", "gcm2d"):
-        from ..solvers import secular_nbody; orbs = secular_nbody.drivers_from_system(S, habs, seed, osv, **secular_nbody.tide_kw(sv.get("orbit_tides")))
+        from ..solvers import secular_nbody; okw = secular_nbody.tide_kw(sv.get("orbit_tides"))
+        if sv.get("nbody_kyr") and osv == "nbody": okw["horizon"] = 1e3*float(sv["nbody_kyr"])
+        orbs = secular_nbody.drivers_from_system(S, habs, seed, osv, **okw)
     else: orbs = drivers_from_system(S, habs, seed) if (secular and climate_model in ("lat", "gcm2d")) else {}
+    orb_info = None
+    if osv == "nbody" and orbs and sv.get("megno_kyr"):
+        nb = next(iter(orbs.values())).sys; orb_info = dict(megno=nb.megno(1e3*float(sv["megno_kyr"])), megno_kyr=float(sv["megno_kyr"]), horizon_kyr=nb.horizon/1e3)
     for h in habs:
         if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee, record=record, model=model, mind=mind,
                                                 climate_model=climate_model, orbit=orbs.get(h.planet_id), solvers=sv or None))
         else: rep.append(dict(habitat=h.to_dict(), skipped="not rocky near-HZ"))
+    if orbs and osv == "nbody" and getattr(next(iter(orbs.values())).sys, "mb", False):
+        nb = next(iter(orbs.values())).sys; ms = nb.moon_state(); ids = [h.planet_id for h in habs]
+        orb_info = dict(orb_info or {}, moons={str(pid): dict(a_AU=float(ms["a"][i]), e=float(ms["e"][i]), inc_deg=float(ms["inc_deg"][i])) for i, pid in enumerate(ids)})
+    if orb_info:
+        for r in rep:
+            if "skipped" not in r: r["solver_orbit"] = orb_info
     cat.poll(years)
     clims = [world.step(h, hw, P) for h in habs]
     live = [r for r in rep if "skipped" not in r]

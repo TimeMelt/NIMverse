@@ -65,6 +65,7 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
     _grm = EP.get("gr_solver", C.get("gr_solver", False))
     if _grm:
         from .solvers import gr as _gr; grf = _gr.event_fields; grdyn = _grm == "dynamics"
+    grpn = float(EP.get("gr_pn", C.get("gr_pn", 0.)) or 0.) if _grm else 0.   # opt-in: higher-PN inspiral + PhenomA IMR tags on mergers
     RG_KPC = 1476.625*MASS_UNIT_MSUN/3.0857e19          # GM/c^2 of one sim mass unit, in kpc
     se2 = float(C["star_soft"]**2); log = []; triggered = 0; Mref = float(np.median(m[smbh])) if smbh else 1.
     def srcs(): return np.where((kind == 0) | (kind == SMBH) | (kind == SBH))[0]
@@ -79,9 +80,18 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
             for b in np.where(kind == SMBH)[0]:
                 a_[sl] += _gr.pw_correction(x[sl] - x[b], m[b], rs*m[b])
         return a_
+    # opt-in C["cosmo_drive"]: same comoving KDK as sim2.leapfrog_cosmo (kick int dt/a~, drift int dt/a~^2, background
+    # (4 pi G/3) rho_m x); the event pass and the frames see physical x = a~ x_c, v = p/a~; log entries gain z and the
+    # cosmic time.  Default (no cosmo_drive) -> the original Newtonian KDK below, bit-identical.
+    cdv = C.get("cosmo_drive"); cos = None
+    if cdv:
+        from .sim2 import cosmo_factors
+        z0 = float(cdv.get("z_start", 1.) if isinstance(cdv, dict) else 1.); k1, dd, k2, bg, _, aa = cosmo_factors(z0, dt, steps); cos = (z0, aa)
     a = acc(); fx, fv, fk = [], [], []
+    if cos: a = a + bg*x
     for i in range(steps):
-        v += .5*dt*a; x += dt*v
+        if cos: v += k1[i]*a; x += dd[i]*v; sc = aa[i + 1]; x *= sc; v /= sc       # -> physical for the event pass
+        else: v += .5*dt*a; x += dt*v
         t = (i+1)*dt; fr = (i+1)//every
         if i % evk == 0:
             # 1) stellar deaths
@@ -130,7 +140,8 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                         log.append(dict(type="black hole merger", t=t, frame=fr, i=int(b1), b=int(b2), g=int(gid[b1]), g2=int(gid[b2]), x=x[b1].tolist(),
                                         mass=float(M1+M2), gw_energy=.05*float(min(M1, M2)),
                                         **(dict(grf(float(M1+M2)*MASS_UNIT_MSUN), gr_chirp_msun=float((M1*M2)**.6/(M1+M2)**.2)*MASS_UNIT_MSUN,
-                                                  **_gr.ringdown_fields(float(M1)*MASS_UNIT_MSUN, float(M2)*MASS_UNIT_MSUN, grspin if grdyn else 0., grspin if grdyn else 0.)) if grf else {})))
+                                                  **_gr.ringdown_fields(float(M1)*MASS_UNIT_MSUN, float(M2)*MASS_UNIT_MSUN, grspin if grdyn else 0., grspin if grdyn else 0.),
+                                                  **(_gr.imr_tags(float(M1)*MASS_UNIT_MSUN, float(M2)*MASS_UNIT_MSUN, grspin if grdyn else 0., grspin if grdyn else 0., grpn, f_lo_hz=1e-4) if grpn else {})) if grf else {})))
             # 4) AGN switch-on: fed SMBHs light up with probability agn_prob
             if duty:   # v5: a fresh feeding episode ignites a quasar with prob agn_prob; it fades after agn_duty_myr
                 for b in smbh:
@@ -144,12 +155,22 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
             for b in ([] if duty else smbh):
                 if kind[b] == SMBH and not active[int(b)] and accreted[int(b)] > 0 and er.random() < EP["agn_prob"]:
                     active[int(b)] = True; log.append(dict(type="quasar ignition", t=t, frame=fr, i=int(b), g=int(gid[b]), x=x[b].tolist(), mass=float(m[b]), **(agn_fid(m[b]) if sfg != "off" else {}), **(grf(float(m[b])*MASS_UNIT_MSUN) if grf else {})))
+        if cos:
+            if i % every == 0: fx.append(x.copy()); fv.append(v.copy()); fk.append(kind.copy())
+            x /= sc; v *= sc; a = acc() + bg*x; v += k2[i]*a
+            continue
         a = acc(); v += .5*dt*a
         if i % every == 0: fx.append(x.copy()); fv.append(v.copy()); fk.append(kind.copy())
     for b in ([] if duty else smbh):   # initial AGN roll for unfed SMBHs (quiescent vs active nuclei)
         if kind[b] == SMBH and not active[int(b)] and er.random() < EP["agn_prob"]*.5: active[int(b)] = True
+    if cos:
+        from .leaves import cosmology as _cz
+        z0, aa = cos; tg = np.arange(steps + 1)*dt; t0g = float(_cz.t_of_a(1/(1 + z0)))
+        for e_ in log:
+            if "t" in e_:
+                ar = float(np.interp(e_["t"], tg, aa)); e_["z"] = float((1 + z0)/ar - 1); e_["t_cosmic_gyr"] = t0g + float(e_["t"])*T_G_MYR/1e3
     info = dict(agn_frac=(float(np.mean([on_time[k]/(steps*dt) for k in on_time])) if duty and on_time else None), log=log, triggered=triggered, active={k: bool(v_) for k, v_ in active.items()}, m_final=m, kind_final=kind,
-                smbh=smbh, tdie=tdie, n_massive=int(((kind == 1) | (kind >= 4)).sum()))
+                smbh=smbh, tdie=tdie, n_massive=int(((kind == 1) | (kind >= 4)).sum()), **({"cosmo": dict(z_start=cos[0], z_end=float((1 + cos[0])/cos[1][-1] - 1))} if cos else {}))
     return np.array(fx), np.array(fv), np.array(fk), info
 
 def simulate_ev(r, C, P, EP, nframes, seed, system=True):
