@@ -156,9 +156,51 @@ def leapfrog_tidal(x, v, m, dt, steps, nframes, Ts, scale):
         if i % every == 0: fx.append(x.copy()); fv.append(v.copy())
     return np.array(fx), np.array(fv)
 
+def cosmo_factors(z_start, dt, steps, unit_myr=None, n_sub=8):
+    """CosmoDrive (opt-in, C["cosmo_drive"] = {"z_start": z}): comoving leapfrog factors for the galaxy N-body.
+    Comoving x with a~ = a/a_start (so x = physical at the start), canonical momentum p = a~^2 dx/dt:
+        dx/dt = p/a~^2,   dp/dt = -(1/a~) [grad Phi(x) - (4 pi G/3) rho_m x]   (G = 1; rho_m comoving mean matter density)
+    i.e. the KDK step uses kick = int dt/a~ and drift = int dt/a~^2 (GADGET-style) and the background term makes an
+    isolated overdense region obey the exact physical equation r'' = -GM/r^2 + (Lambda/3) r: bound galaxies decouple
+    from the expansion, the group's outskirts feel the Hubble/Lambda flow.  Returns (k1, d, k2, bg, a_end) per step."""
+    from .leaves import cosmology as cz
+    um = T_G_MYR if unit_myr is None else unit_myr; ug = um/1e3
+    a0 = 1/(1 + float(z_start)); t0 = cz.t_of_a(a0)
+    at = lambda t: cz.a_of_t(t)/a0
+    def integ(ta, tb, p):
+        tt = np.linspace(ta, tb, n_sub + 1); y = np.array([at(t)**-p for t in tt]); return float(np.trapezoid(y, tt))/ug
+    # rho_m (comoving, sim units 1e8 Msun / kpc^3): Om rho_crit0 / a_start^3 ; rho_crit0 = 3 H0^2/(8 pi G)
+    rho_c0 = 277.5*(cz.H0/100.)**2/1e8; bg = 4*np.pi/3*cz.OM*rho_c0/a0**3
+    k1 = np.empty(steps); d = np.empty(steps); k2 = np.empty(steps)
+    for i in range(steps):
+        ta, tm, tb = t0 + i*dt*ug, t0 + (i + .5)*dt*ug, t0 + (i + 1)*dt*ug
+        k1[i] = integ(ta, tm, 1); d[i] = integ(ta, tb, 2); k2[i] = integ(tm, tb, 1)
+    return k1, d, k2, bg, at(t0 + steps*dt*ug), np.array([at(t0 + i*dt*ug) for i in range(steps + 1)])
+
+def leapfrog_cosmo(x, v, m, e2, dt, steps, nframes, z_start, accf=None):
+    """Comoving KDK (see cosmo_factors); frames are physical positions a~ x and peculiar velocities p/a~."""
+    k1, dd, k2, bg, a_end, aa = cosmo_factors(z_start, dt, steps)
+    acc = (lambda y: accel(y, m, e2)) if accf is None else accf
+    x, p = x.copy(), v.copy(); every = max(1, steps//nframes); fx, fv = [], []
+    g = acc(x) + bg*x
+    for i in range(steps):
+        p += k1[i]*g; x += dd[i]*p; g = acc(x) + bg*x; p += k2[i]*g
+        if i % every == 0: fx.append(aa[i + 1]*x); fv.append(p/aa[i + 1])
+    return np.array(fx), np.array(fv), dict(z_start=float(z_start), a_end_rel=float(a_end), z_end=float((1 + z_start)/a_end - 1),
+                                             t_gyr=float(steps*dt*T_G_MYR/1e3))
+
 def simulate(r, C, P, nframes):
     Gx = make_galaxies(r, C, P); S = make_system(r, C, P)
-    if C.get("gravity", "direct") == "bh":
+    cd = C.get("cosmo_drive")
+    if cd:                                                              # opt-in; default path below is untouched
+        if C.get("gravity", "direct") == "bh":
+            from .bh import accel_bh
+            cores = np.where(Gx["kind"] == 0)[0]; stars = np.where(Gx["kind"] != 0)[0]; se2 = float(Gx["e2"][stars[0]])
+            af = lambda y: accel_bh(y, Gx["m"], Gx["e2"], cores, stars, se2, C.get("bh_theta", .6))
+        else: af = None
+        gx, gv, Gx["cosmo"] = leapfrog_cosmo(Gx["x"], Gx["v"], Gx["m"], Gx["e2"], C["galaxy_dt"], C["galaxy_steps"], nframes,
+                                             float(cd.get("z_start", 1.) if isinstance(cd, dict) else 1.), af)
+    elif C.get("gravity", "direct") == "bh":
         gx, gv = leapfrog_bh(Gx["x"], Gx["v"], Gx["m"], Gx["e2"], Gx["kind"], C["galaxy_dt"], C["galaxy_steps"], nframes, C.get("bh_theta", .6))
     else:
         gx, gv = leapfrog(Gx["x"], Gx["v"], Gx["m"], Gx["e2"], C["galaxy_dt"], C["galaxy_steps"], nframes)

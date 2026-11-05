@@ -17,8 +17,29 @@ Both: spin axis integrated from Colombo's top  ds/dt = alpha (s.n)(s x n)  with 
     assumes an Earth-like satellite boost; the leaf omits the M*/a^3 factor) against the actual orbit normal -> obliquity = acos(s.n) including spin-orbit resonances,
     and climatic precession from the equinox direction (n x s).
 orbit_solver="off"     FixedOrbit: e, tilt from the habitat, varpi 0 (no secular forcing).
-Fidelity / gaps: point masses (no tides, no J2 of the planet beyond alpha, no satellites); WH accuracy ~ (m/M)(dt/P)^2,
-dt = P_inner/20; close encounters are not regularised (MEGNO flags them); LL theory is linear in e, i (good for e,i < ~0.1)."""
+tides=True (opt-in; solvers["orbit_tides"] = "on" | "moon"): constant-time-lag equilibrium tides (Hut 1981; Leconte et al.
+    2010 eqs. with the planet's spin AM << orbital AM): K = 3/2 k2 dt_lag G M*^2/R (R/a)^6 n^2,
+      d omega/dt = -K/(C m R^2) [(1 + cos^2 eps) Omega(e) omega/n - 2 cos eps N(e)]          (spin-down -> pseudo-synchronous)
+      d eps/dt   =  K sin eps/(C m R^2 omega) [cos eps Omega(e) omega/n - 2 N(e)]              (obliquity)
+      de/dt      =  11 a e K/(2 G M* m) [Omega_e(e) cos eps omega/n - 18/11 N_e(e)]          (eccentricity)
+    k2 = 0.3, dt_lag = 600 s (Earth's present lunar-tide lag), C = 0.33, R = R_E (m/M_E)^0.27.  The spin rate feeds the
+    precession constant (alpha ~ omega).  Secular: e damping enters LL as an imaginary diagonal (A + i Gamma, rate frozen
+    at the initial spin/obliquity, so the theory stays linear); spin/obliquity integrated on the dt_spin grid.  N-body:
+    spin/obliquity tides only (e-damping times >> the 20 kyr N-body horizon; handled by the secular hand-over).
+    moon=True adds a satellite (the system's largest moon of that planet, else an Earth-like Moon, M_E/81.3 at 60.3 R):
+    constant-lag torque T = 3 k2 G M_m^2 R^5 (omega - n_m) dt_lag / a_m^6 spins the planet down and moves the moon
+    (da_m/dt = 2 T sqrt(a_m/(G(m+M_m)))/M_m; Earth-Moon today: 4.5e16 N m, 3.8 cm/yr), and the satellite share of the
+    spin-axis precession scales as M_m/a_m^3 (lunar/solar = 2.17 for Earth).  Without moon=True alpha keeps the leaf's
+    Earth-Moon calibration (tides then only scale it with omega).
+LL-linear vs N-body chaos: SecularSystem is quasi-periodic by construction (a sum of eigenmodes; no resonances, no
+    diffusion, MEGNO would be exactly 2); NBodySystem captures mean-motion resonances, secular chaos and close encounters
+    (MEGNO > 2) but only up to `horizon` years, after which every driver continues on the LL solution.  Long-term chaotic
+    diffusion of e/i (e.g. Mercury-like Laskar 1994 behaviour) and obliquity chaos from overlapping spin-orbit resonances
+    beyond the horizon are therefore NOT represented; the obliquity integration itself is nonlinear and does show
+    spin-orbit resonance capture against the LL nodal modes.
+Fidelity / gaps: point masses (no planet J2 beyond alpha; tides are equilibrium constant-lag only, no ocean resonance /
+    thermal atmospheric tides / Cassini-state damping); WH accuracy ~ (m/M)(dt/P)^2, dt = P_inner/20; close encounters are
+    not regularised (MEGNO flags them); LL theory is linear in e, i (good for e,i < ~0.1)."""
 import numpy as np
 
 def prec_const(a, M_star, spin):
@@ -111,12 +132,82 @@ def _spin0(nrm, tilt, phs):
     return np.array(out)
 
 
+# ---------------------------------------------------------------- tides (constant time lag)
+AU_M = 1.495978707e11; MSUN_KG = 1.989e30; YR_SI = 3.15576e7
+M_EARTH = 3.003e-6; R_EARTH = 6.371e6/AU_M; DAY_YR = 86164.1/YR_SI       # sidereal day in yr
+TIDE_K2, TIDE_DT, TIDE_C = .3, 600./YR_SI, .33
+MOON_M, MOON_A = M_EARTH/81.3, 60.27*R_EARTH
+
+def _f(e):
+    e2 = e*e; b = 1 - e2
+    f1 = 1 + 31/2*e2 + 255/8*e2**2 + 185/16*e2**3 + 25/64*e2**4; f2 = 1 + 15/2*e2 + 45/8*e2**2 + 5/16*e2**3
+    f3 = 1 + 15/4*e2 + 15/8*e2**2 + 5/64*e2**3; f4 = 1 + 3/2*e2 + 1/8*e2**2; f5 = 1 + 3*e2 + 3/8*e2**2
+    return dict(Na=f1/b**7.5, N=f2/b**6, Ne=f3/b**6.5, Oe=f4/b**5, O=f5/b**4.5)
+
+class Tides:
+    """Per-system tidal state: spin rates omega (rad/yr), optional satellites (mass, semi-major axis)."""
+    def __init__(self, a, m, M_star, spin, moon=None, k2=TIDE_K2, dt_lag=TIDE_DT, C=TIDE_C):
+        self.a = np.asarray(a, float); self.m = np.asarray(m, float); self.M = float(M_star); N = len(self.a)
+        self.R = R_EARTH*(np.maximum(self.m, 1e-9)/M_EARTH)**.27; self.k2, self.dtl, self.C = k2, dt_lag, C
+        sp = np.ones(N) if spin is None else np.maximum(np.asarray(spin, float), .05)
+        self.w0 = 2*np.pi/DAY_YR*sp; self.w = self.w0.copy(); self.n = 2*np.pi*np.sqrt((self.M + self.m)/self.a**3)
+        self.has_moon = moon is not None
+        mm = np.zeros(N) if moon is None else np.asarray(moon[0], float); am = np.ones(N) if moon is None else np.asarray(moon[1], float)
+        self.mm, self.am = mm, am.astype(float).copy()
+        self.lam0 = 2.17                                                # Earth: lunar/solar precession torque ratio
+    def K(self): return 1.5*self.k2*self.dtl*G*self.M**2/self.R*(self.R/self.a)**6*self.n**2
+    def lam(self): return np.where(self.mm > 0, (self.mm/self.am**3)/(self.M/self.a**3), 0.)
+    def alpha_fac(self):
+        f = self.w/self.w0
+        return f*(1 + self.lam())/(1 + self.lam0) if self.has_moon else f
+    def gamma_e(self, cos_eps):
+        """Linear e-damping rate (1/yr, >0 damps) at the current spin and obliquity (f(e) -> 1)."""
+        return -11*self.a*self.K()/(2*G*self.M*self.m)*(cos_eps*self.w/self.n - 18/11)
+    def moon_torque(self):
+        nm = np.where(self.mm > 0, np.sqrt(G*(self.m + self.mm)/np.maximum(self.am, 1e-12)**3), 0.)
+        return np.where(self.mm > 0, 3*self.k2*G*self.mm**2*self.R**5*(self.w - nm)*self.dtl/np.maximum(self.am, 1e-12)**6, 0.)
+    def step(self, h, s, nrm, e):
+        """Advance omega (and moons) by h yr; returns s rotated by the tidal obliquity change.  Stiff-safe: omega relaxes
+        exactly (exponential) to its instantaneous equilibrium and eps follows tan(eps/2) *= exp(g dt) (exact for
+        d eps/dt = g sin eps); the coupling is operator-split over <= 8 substeps (|g| dt, a dt <= 0.5 when resolvable)."""
+        f = _f(np.minimum(np.asarray(e, float), .9)); ce = np.clip((s*nrm).sum(1), -1, 1); eps = np.arccos(ce)
+        K = self.K(); I = self.C*self.m*self.R**2; c = np.cos(eps); a_s = K/(I*self.n)*(1 + c*c)*f["O"]
+        g = K/(I*self.w)*(c*f["O"]*self.w/self.n - 2*f["N"])
+        nsub = int(np.clip(np.ceil(np.max(np.maximum(np.abs(g), a_s))*h/.5), 1, 8)); hs = h/nsub   # exact sub-solutions: stable for any hs
+        for _ in range(nsub):
+            c = np.cos(eps); a_s = K/(I*self.n)*(1 + c*c)*f["O"]
+            if self.has_moon:
+                nm = np.where(self.mm > 0, np.sqrt(G*(self.m + self.mm)/np.maximum(self.am, 1e-12)**3), 0.)
+                bm = np.where(self.mm > 0, 3*self.k2*G*self.mm**2*self.R**5*self.dtl/np.maximum(self.am, 1e-12)**6/I, 0.)
+                T = bm*I*(self.w - nm)
+                am = self.am + hs*2*T*np.sqrt(self.am/(G*(self.m + self.mm)))/np.maximum(self.mm, 1e-30)
+                self.am = np.where(self.mm > 0, np.maximum(am, 3*self.R), self.am)
+            else: nm = bm = np.zeros_like(self.w)
+            atot = a_s + bm; weq = (K/I*2*c*f["N"] + bm*nm)/np.maximum(atot, 1e-300)
+            self.w = np.maximum(weq + (self.w - weq)*np.exp(-atot*hs), .05*self.n)
+            g = K/(I*self.w)*(c*f["O"]*self.w/self.n - 2*f["N"])
+            eps = 2*np.arctan(np.tan(np.clip(eps, 1e-12, np.pi - 1e-12)/2)*np.exp(np.clip(g*hs, -50, 50)))
+        u = s - nrm*ce[:, None]; un = np.linalg.norm(u, axis=1); ok = un > 1e-12
+        u = np.where(ok[:, None], u/np.maximum(un, 1e-12)[:, None], 0.)
+        s2 = nrm*np.cos(eps)[:, None] + u*np.sin(eps)[:, None]
+        return np.where(ok[:, None], s2, s)
+    def state(self): return dict(omega_rel=(self.w/self.w0).tolist(), a_moon=self.am.tolist(), m_moon=self.mm.tolist())
+
+
+def _moon_arg(moon, N):
+    if moon is None or moon is False: return None
+    if moon is True: return (np.full(N, MOON_M), np.full(N, MOON_A))
+    return moon                                                        # explicit (masses, semi-major axes)
+
+
 # ---------------------------------------------------------------- N-body (WH, DH coordinates)
 class NBodySystem:
     """Shared integrator for one stellar system; drivers(...) gives per-planet driver objects."""
-    def __init__(self, a, m, M_star, tilt, spin=None, seed=0, e_init=None, gr=True, dt=None, horizon=HORIZON, rec_dt=REC_DT):
+    def __init__(self, a, m, M_star, tilt, spin=None, seed=0, e_init=None, gr=True, dt=None, horizon=HORIZON, rec_dt=REC_DT, tides=False, moon=None):
         a = np.asarray(a, float); m = np.asarray(m, float); N = len(a); self.N = N; self.M = float(M_star); self.m = m
         self.sig = (N, round(float(M_star), 9), tuple(np.round(a, 9)), tuple(np.round(np.abs(tilt), 9)), int(seed))
+        moon = _moon_arg(moon, N); self.tides = Tides(a, m, M_star, spin, moon) if tides else None
+        if tides: self.sig = self.sig + ("tides", moon is not None)
         e0, inc, Om, w, M0, tilt, phs = _initial(a, m, M_star, tilt, seed, e_init)
         self.mu = G*self.M*np.ones(N)                    # DH Kepler part uses the star's mass only
         x, vh = elements_to_xv(G*(self.M + m), a, e0, inc, Om, w, M0)
@@ -127,7 +218,7 @@ class NBodySystem:
         self.alpha = prec_const(a, M_star, spin)
         ev, nrm, _ = xv_to_evec(G*(self.M + m), x, vh); self.s = _spin0(nrm, tilt, phs)
         self.rec_t = [0.]; self.rec = [self._sample()]
-        self.fallback = SecularSystem(a, m, M_star, tilt, spin, seed, e_init)
+        self.fallback = SecularSystem(a, m, M_star, tilt, spin, seed, e_init, tides=tides, moon=moon)
         self.E0 = self.energy()
 
     def vhelio(self): return self.v + (self.m[:, None]*self.v).sum(0)/self.M
@@ -164,8 +255,10 @@ class NBodySystem:
         while self.t < t_to - 1e-12:
             h = self.dt; self._step(h); self.t += h
             if spin:
-                _, nrm, _ = xv_to_evec(G*(self.M + self.m), self.x, self.vhelio())
-                self.s = _spin_rotate(self.s, nrm, -self.alpha*(self.s*nrm).sum(1)*h)
+                ev, nrm, _ = xv_to_evec(G*(self.M + self.m), self.x, self.vhelio())
+                al = self.alpha if self.tides is None else self.alpha*self.tides.alpha_fac()
+                self.s = _spin_rotate(self.s, nrm, -al*(self.s*nrm).sum(1)*h)
+                if self.tides is not None: self.s = self.tides.step(h, self.s, nrm, np.linalg.norm(ev, axis=1))
                 self.s /= np.linalg.norm(self.s, axis=1)[:, None]
             if self.t >= nxt: self.rec_t.append(self.t); self.rec.append(self._sample()); nxt += self.rec_dt
 
@@ -202,9 +295,11 @@ def _laplace_b(s, j, alpha, n=256):
 
 
 class SecularSystem:
-    def __init__(self, a, m, M_star, tilt, spin=None, seed=0, e_init=None, gr=True, dt_spin=20.):
+    def __init__(self, a, m, M_star, tilt, spin=None, seed=0, e_init=None, gr=True, dt_spin=20., tides=False, moon=None):
         a = np.asarray(a, float); m = np.asarray(m, float); N = len(a); self.N = N
         self.sig = (N, round(float(M_star), 9), tuple(np.round(a, 9)), tuple(np.round(np.abs(np.asarray(tilt, float)), 9)), int(seed))
+        moon = _moon_arg(moon, N); self.tides = Tides(a, m, M_star, spin, moon) if tides else None
+        if tides: self.sig = self.sig + ("tides", moon is not None)
         e0, inc, Om, w, M0, tilt, phs = _initial(a, m, M_star, tilt, seed, e_init)
         nm = 2*np.pi*np.sqrt((M_star + m)/a**3); A = np.zeros((N, N)); B = np.zeros((N, N))
         for j in range(N):
@@ -215,11 +310,13 @@ class SecularSystem:
                 A[j, j] += c*b1; A[j, k] = -c*_laplace_b(1.5, 2, al); B[j, j] -= c*b1; B[j, k] = c*b1
             if gr: A[j, j] += 3*(G*M_star)**1.5/(C_AUYR**2*a[j]**2.5*(1 - e0[j]**2))
         self.A, self.B = A, B
+        if self.tides is not None:                                        # tidal e-damping: dz/dt = i A z - Gamma z
+            self.Gam = self.tides.gamma_e(np.cos(np.abs(np.asarray(tilt, float)))); A = A + 1j*np.diag(self.Gam)
         self.gA, self.VA = np.linalg.eig(A); self.gB, self.VB = np.linalg.eig(B)
         z0 = e0*np.exp(1j*(Om + w)); zeta0 = np.sin(inc)*np.exp(1j*Om)
         self.cA = np.linalg.solve(self.VA, z0); self.cB = np.linalg.solve(self.VB, zeta0)
         self.alpha = prec_const(a, M_star, spin)
-        self.dt_spin = float(dt_spin); self.ts = [0.]; self.s = [_spin0(self._normal(0.), tilt, phs)]
+        self.dt_spin = float(dt_spin); self.ts = [0.]; self.s = [_spin0(self._normal(0.), tilt, phs)]; self.al = [self.alpha]
         self.g = np.real(self.gA)
 
     def _ez(self, t): return (self.VA*(self.cA*np.exp(1j*self.gA*t))).sum(1)
@@ -234,14 +331,16 @@ class SecularSystem:
 
     def _spin_to(self, t):
         while self.ts[-1] < t:
-            t0 = self.ts[-1]; h = self.dt_spin; s = self.s[-1]
+            t0 = self.ts[-1]; h = self.dt_spin; s = self.s[-1]; al = self.al[-1]
             nm = self._normal(t0 + .5*h)                                   # midpoint normal (2nd order)
-            s = _spin_rotate(s, nm, -self.alpha*(s*nm).sum(1)*h); s /= np.linalg.norm(s, axis=1)[:, None]
-            self.ts.append(t0 + h); self.s.append(s)
+            s = _spin_rotate(s, nm, -al*(s*nm).sum(1)*h); s /= np.linalg.norm(s, axis=1)[:, None]
+            if self.tides is not None:
+                s = self.tides.step(h, s, nm, np.abs(self._ez(t0 + .5*h))); al = self.alpha*self.tides.alpha_fac()
+            self.ts.append(t0 + h); self.s.append(s); self.al.append(al)
         k = int(np.searchsorted(self.ts, t)); k = min(max(k, 0), len(self.ts) - 1)
         if k > 0 and self.ts[k] > t:                                      # partial step from the previous sample
             s = self.s[k - 1]; h = t - self.ts[k - 1]; nm = self._normal(self.ts[k - 1] + .5*h)
-            return _spin_rotate(s, nm, -self.alpha*(s*nm).sum(1)*h)
+            return _spin_rotate(s, nm, -self.al[k - 1]*(s*nm).sum(1)*h)
         return self.s[k]
 
     def at(self, idx, t):
@@ -264,6 +363,15 @@ class FixedOrbit:
     def at(self, t): return dict(e=self.e, varpi=0., obliquity=self.tilt)
 
 
+def tide_kw(mode):
+    """solvers["orbit_tides"] -> drivers_from_system kwargs: None/False -> {} (default, keys unchanged); "on"/True -> tides;
+    "moon" -> tides + each planet's largest system moon (Earth-like Moon if it has none)."""
+    if not mode: return {}
+    if mode in (True, "on", "tides"): return dict(tides=True)
+    if mode == "moon": return dict(tides=True, moon="system")
+    raise ValueError(f"orbit_tides must be on|moon, got {mode!r}")
+
+
 def drivers_from_system(S, habs, seed, solver="secular", **kw):
     """{planet_id: driver} like leaves.orbit_climate.drivers_from_system, for solver in {"nbody", "secular", "off"}."""
     kind = np.asarray(S["kind"]); Ms = float(np.asarray(S["m"])[kind == 0].sum())
@@ -271,6 +379,19 @@ def drivers_from_system(S, habs, seed, solver="secular", **kw):
     if solver == "off": return {h.planet_id: FixedOrbit(h.e, h.tilt) for h in habs}
     if not habs: return {}
     a = [h.a for h in habs]; m = [h.m for h in habs]; tilt = [h.tilt for h in habs]; spin = [h.spin for h in habs]; e = [h.e for h in habs]
+    if kw.get("moon") == "system": kw["moon"] = system_moons(S, habs)
     if solver == "nbody": return NBodySystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
     if solver == "secular": return SecularSystem(a, m, Ms, tilt, spin, seed=seed*1009, e_init=e, **kw).drivers(ids)
     raise ValueError(f"orbit_solver must be nbody|secular|off, got {solver!r}")
+
+
+def system_moons(S, habs):
+    """(masses, semi-major axes) of each habitat's largest moon in S ('moon{p}.k' for planet 'planet{p}', habitat
+    planet_id = its index in S); an Earth-like Moon scaled to the planet (M_m/m = 1/81.3, a_m ~ m^1/3) if it has none."""
+    names = [str(x) for x in S.get("name", [])]; x = np.asarray(S["x"]); mm = np.asarray(S["m"]); out_m, out_a = [], []
+    for h in habs:
+        pi = int(h.planet_id); pn = names[pi] if pi < len(names) else ""
+        ks = [i for i, nme in enumerate(names) if pn.startswith("planet") and nme.startswith("moon" + pn[6:] + ".")]
+        if not ks: out_m.append(MOON_M*h.m/M_EARTH); out_a.append(MOON_A*(h.m/M_EARTH)**(1/3)); continue
+        k = max(ks, key=lambda i: mm[i]); out_m.append(float(mm[k])); out_a.append(float(np.linalg.norm(x[k] - x[pi])))
+    return (np.array(out_m), np.array(out_a))

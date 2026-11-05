@@ -48,9 +48,9 @@ class HabitatRun:
             self.lat, self.carbon = biogeochem.init_climate(h, self.hw, P, orbit); self.bgc = biogeochem.Biogeochem(self.carbon)
         elif climate_model == "gcm2d":  # solvers.climate2d: lat x lon EBM-GCM (+ two-stream RT if sv["rt"]) + land-cell weathering
             from ..solvers import climate2d
-            self.lat, self.carbon = climate2d.init_gcm2d(h, self.hw, P, orbit, rt_on=bool(sv.get("rt"))); self.bgc = biogeochem.Biogeochem(self.carbon)
+            self.lat, self.carbon = climate2d.init_gcm2d(h, self.hw, P, orbit, rt_on=bool(sv.get("rt")), physics=sv.get("gcm_physics") or ()); self.bgc = biogeochem.Biogeochem(self.carbon)
         if sv.get("foodweb"):
-            from ..solvers import foodweb; self.fw = foodweb.FoodWeb()
+            from ..solvers import foodweb; self.fw = foodweb.make(sv["foodweb"], seed=int(abs(h.a)*1e6) + 7*int(getattr(h, "planet_id", 0)))
         self.hist = world.ClimateHistory(n=4000); self.cu = culture_mod.Culture(); self.tstress = {}; self.peak = {}; self.n_imp = 0; self.impact_loss = 0.; self.k = 0
 
     @property
@@ -214,7 +214,7 @@ def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, cultu
     sv = dict(solvers or {}); osv = sv.get("orbit_solver")
     if sv.get("stellar_solver"): hw.solver_track = "semi"
     if osv and climate_model in ("lat", "gcm2d"):
-        from ..solvers import secular_nbody; orbs = secular_nbody.drivers_from_system(S, habs, seed, osv)
+        from ..solvers import secular_nbody; orbs = secular_nbody.drivers_from_system(S, habs, seed, osv, **secular_nbody.tide_kw(sv.get("orbit_tides")))
     else: orbs = drivers_from_system(S, habs, seed) if (secular and climate_model in ("lat", "gcm2d")) else {}
     for h in habs:
         if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee, record=record, model=model, mind=mind,

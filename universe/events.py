@@ -58,17 +58,27 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
     sfg = EP.get("sf_gate", C.get("sf_gate", "tag")); sfg = {True: "strict", False: "off"}.get(sfg, sfg); bhM = {}
     # opt-in universe.solvers.gr (config/EP "gr_solver": true): extra gr_* fields (Kerr ISCO/photon/horizon, eta, capture flag,
     # chirp mass) on TDE / quasar / merger entries.  Logging only: dynamics, RNG draws and the default log are unchanged.
-    grf = None
-    if EP.get("gr_solver", C.get("gr_solver", False)):
-        from .solvers import gr as _gr; grf = _gr.event_fields
+    # gr_solver="dynamics" additionally switches on (i) a Kerr-ISCO-matched Paczynski-Wiita pull of SMBHs on stars and
+    # (ii) a Kerr marginally-bound capture gate (stars whose tidal radius lies inside r_mb are swallowed whole: no flare,
+    # no AGN fuel).  Spin of every SMBH = C["gr_spin"] (default 0.7).  Off (default) -> RNG streams and log are untouched.
+    grf = None; grdyn = False; grspin = float(C.get("gr_spin", .7))
+    _grm = EP.get("gr_solver", C.get("gr_solver", False))
+    if _grm:
+        from .solvers import gr as _gr; grf = _gr.event_fields; grdyn = _grm == "dynamics"
+    RG_KPC = 1476.625*MASS_UNIT_MSUN/3.0857e19          # GM/c^2 of one sim mass unit, in kpc
     se2 = float(C["star_soft"]**2); log = []; triggered = 0; Mref = float(np.median(m[smbh])) if smbh else 1.
     def srcs(): return np.where((kind == 0) | (kind == SMBH) | (kind == SBH))[0]
     def acc():
         if gravity == "bh":
             from .bh import accel_bh
             s = srcs(); stars = np.where((kind != 0) & (kind != SMBH) & (kind != SBH))[0]
-            return accel_bh(x, m, e2, s, stars, se2, C.get("bh_theta", .6))
-        return accel(x, m, e2)
+            a_ = accel_bh(x, m, e2, s, stars, se2, C.get("bh_theta", .6))
+        else: a_ = accel(x, m, e2)
+        if grdyn:
+            rs = _gr.pw_rs(grspin)*RG_KPC; sl = np.where(kind == 1)[0]
+            for b in np.where(kind == SMBH)[0]:
+                a_[sl] += _gr.pw_correction(x[sl] - x[b], m[b], rs*m[b])
+        return a_
     a = acc(); fx, fv, fk = [], [], []
     for i in range(steps):
         v += .5*dt*a; x += dt*v
@@ -100,11 +110,14 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                 for j in hit:
                     Mb = float(m[b])*MASS_UNIT_MSUN if kind[b] == SMBH else bhM.get(int(b), float(m[b])*MASS_UNIT_MSUN)
                     fid = bh_fidelity(Mb, float(sm[j])) if sfg != "off" else {}; lum = fid.get("visible", True) or sfg != "strict"   # dynamics identical either way
+                    if grdyn:   # Kerr capture: tidal radius inside the marginally bound orbit -> swallowed whole
+                        cap = bh_fidelity(Mb, float(sm[j]))["r_tde"] < _gr.capture_radius(grspin)*Mb*_gr.M_SUN_AU
+                        lum = lum and not cap; fid = dict(fid, gr_kerr_captured=bool(cap))
                     p = m[b]*v[b] + .5*m[j]*v[j]; m[b] += .5*m[j]; v[b] = p/m[b]; kind[j] = GONE; m[j] = 0.
                     if kind[b] == SMBH: accreted[int(b)] += 1; fresh[int(b)] = fresh[int(b)] or lum   # swallowed whole: no disk -> no AGN fuel
                     log.append(dict(type="tidal disruption" if lum else "swallowed whole", **({"swallowed": not fid["visible"]} if fid else {}), t=t, frame=fr, i=int(j), b=int(b),
                                     g=int(gid[b]), x=x[b].tolist(), mass=float(sm[j]), **fid,
-                                    **(grf(Mb, 0., r_peri_au=bh_fidelity(Mb, float(sm[j]))["r_tde"], m2_msun=float(sm[j])) if grf else {})))
+                                    **(grf(Mb, grspin if grdyn else 0., r_peri_au=bh_fidelity(Mb, float(sm[j]))["r_tde"], m2_msun=float(sm[j])) if grf else {})))
             # 3) SMBH mergers
             sb = [b for b in smbh if kind[b] == SMBH]
             for p_ in range(len(sb)):
@@ -116,7 +129,8 @@ def run_events(Gx, C, EP, seed, nframes, gravity):
                         m[b1] = .95*(M1+M2); m[b2] = 0.; kind[b2] = GONE; active[int(b1)] = True; until[int(b1)] = t + duty
                         log.append(dict(type="black hole merger", t=t, frame=fr, i=int(b1), b=int(b2), g=int(gid[b1]), g2=int(gid[b2]), x=x[b1].tolist(),
                                         mass=float(M1+M2), gw_energy=.05*float(min(M1, M2)),
-                                        **(dict(grf(float(M1+M2)*MASS_UNIT_MSUN), gr_chirp_msun=float((M1*M2)**.6/(M1+M2)**.2)*MASS_UNIT_MSUN) if grf else {})))
+                                        **(dict(grf(float(M1+M2)*MASS_UNIT_MSUN), gr_chirp_msun=float((M1*M2)**.6/(M1+M2)**.2)*MASS_UNIT_MSUN,
+                                                  **_gr.ringdown_fields(float(M1)*MASS_UNIT_MSUN, float(M2)*MASS_UNIT_MSUN, grspin if grdyn else 0., grspin if grdyn else 0.)) if grf else {})))
             # 4) AGN switch-on: fed SMBHs light up with probability agn_prob
             if duty:   # v5: a fresh feeding episode ignites a quasar with prob agn_prob; it fades after agn_duty_myr
                 for b in smbh:

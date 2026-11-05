@@ -25,9 +25,24 @@ Interface mirrors LatClimate (T/Td zonal-mean properties, last["ice"/"amp"/"ins"
 integrate(), step(), packet()) so leaves.biogeochem.CarbonCycle/Biogeochem work unchanged; GCMCarbon weathers land
 cells only.  Extra stressors: grid_* (per-cell T, water, ice, land), grid_lon_deg, climate_model="gcm2d".
 
-Fidelity: an EBM on a 2-D grid -- no dynamics (no Hadley cell, no winds, no explicit clouds); transport is diffusive.
-Good for land/ocean contrast, continentality, regional ice/water, seasonality; not for circulation regimes, tidally
-locked dayside/nightside jets (n/a: insolation is diurnally averaged), or precipitation patterns beyond diffusion-decay.
+  * RT-path thermodynamics (solvers.rt PHYS flags): H2-H2/N2-N2/CO2-CO2 CIA in the tables, CO2 collapse onto the cold
+    trap (p_atm <= p_sat,CO2(T_coldest winter band); excess kept as surface CO2 ice, stressor co2_ice_bar), CO2-ice cloud
+    opacity above the CO2 condensation level, Simpson-Nakajima runaway (OLR capped at rt.runaway_limit(g); stressor
+    runaway when ASR exceeds it with an ocean), and heat transport scaled with surface pressure (Williams & Kasting 1997
+    D ~ p cp/m^2, clipped to [1, D_P_MAX]).
+  * Optional physics (physics=... / --gcm-physics clouds,diurnal,winds|all; default none = bit-identical to before):
+      clouds  -- prognostic condensate path W (source from the precipitation field, ~4 d lifetime) -> cover and tau.
+      diurnal -- first daily harmonic of insolation on a land/ocean diurnal skin (day = 1/spin); its amplitude adds to the
+                 seasonal range for ice / liquid water and makes OLR nonlinear (<T^4> correction).
+      winds   -- Held-Hou Hadley edge (Earth-relative transport boost inside phi_H) + friction-limited thermal wind U(lat)
+                 with conservative upwind zonal advection of heat (boundary-layer share) and moisture.
+
+Fidelity: still an EBM on a 2-D grid, not a primitive-equation GCM: no prognostic momentum / eddies / stationary waves,
+meridional transport stays diffusive (Hadley only rescales it), clouds are one condensate path with no vertical
+structure, no tidally-locked day/night (insolation is diurnally averaged; the diurnal harmonic is a perturbation).
+Cold CO2-rich planets: the collapse caps p_atm, so planets the leaf keeps warm by an extrapolated sigma (T-G)^4
+greenhouse (e.g. seed 4 planet3, leaf ~246 K) sit near 180 K here -- the residual is the physics (the
+maximum-greenhouse limit), not a bug.
 """
 import numpy as np
 import scipy.sparse as sp
@@ -90,7 +105,7 @@ def seasonal_insolation(x, obliquity, e=0., varpi=0., nt=48):
 
 class GCM2D:
     """lat x lon EBM; drop-in for leaves.world.LatClimate (see module doc)."""
-    def __init__(self, h, LP=None, hw=None, n=24, nlon=N_LON, orbit=None, rt_on=False, spinup=True):
+    def __init__(self, h, LP=None, hw=None, n=24, nlon=N_LON, orbit=None, rt_on=False, spinup=True, physics=()):
         P = as_bus(LP); self.n, self.nlon = n, nlon; self.x = band_x(n); self.lat = np.degrees(np.arcsin(self.x)); self.orbit = orbit
         self.lon = np.degrees((np.arange(nlon) + .5)*2*np.pi/nlon - np.pi); self.rt = bool(rt_on); self.N = n*nlon
         oc = float(np.clip(h.volatiles, 0, 1)) if h.ptype in ("ocean", "terran", "ice") else float(np.clip(.5*h.volatiles, 0, 1))
@@ -100,7 +115,10 @@ class GCM2D:
         self.C = np.where(lf, C_LAND2, C_MIX).astype(float); self.gam = np.where(lf, 0., GAMMA); self.Cd = C_DEEP
         Rrel = float(np.clip((h.m/3e-6)**(1./3.), .3, 4.)); self.Rrel = Rrel
         self.D = float(np.clip(P["lat_diffusion"]*Rrel**D_SIZE/max(h.spin, .3)**.5, .05, 5.))
-        self.Lop = self._laplacian()
+        self.p_atm = None; self.co2_ice = 0.; self.f_D = 1.
+        self.physics = parse_physics(physics); self.spin = float(max(h.spin, 1e-3)); self.clw = None; self.U = np.zeros(n)
+        self.hm = self._hadley() if "winds" in self.physics else None
+        self.Lop = self._Ldiff = self._laplacian(); self._Adv = None
         A = float(np.clip(ALBEDO[h.ptype]*P["albedo_mult"], 0, .95))
         aw = A if h.ptype in ("ice", "lava", "gas giant", "ice giant") else ALB_WARM_K*A
         if h.ptype == "desert": aw = float(np.clip(aw + DESERT_ALB, .02, .9))
@@ -129,8 +147,8 @@ class GCM2D:
     def Td(self, v):
         v = np.asarray(v, float); self.Tdg = np.repeat(v[:, None], self.nlon, 1) if v.ndim == 1 else v.copy()
 
-    def _laplacian(self):
-        n, m = self.n, self.nlon; dx = 2./n; dl = 2*np.pi/m; idx = np.arange(self.N).reshape(n, m); oc = self.oc_m
+    def _laplacian(self, wa=ATM_D, wo=OCEAN_D):
+        n, m = self.n, self.nlon; hm = np.ones(n - 1) if getattr(self, "hm", None) is None else self.hm; dx = 2./n; dl = 2*np.pi/m; idx = np.arange(self.N).reshape(n, m); oc = self.oc_m
         rows, cols, vals = [], [], []
         def face(a, b, c):
             rows.extend([a, b]); cols.extend([b, a]); vals.extend([c, c])
@@ -140,13 +158,81 @@ class GCM2D:
                 k = idx[i, j]
                 if i < n - 1:
                     w = (1 - xe[i + 1]**2)/dx**2
-                    face(k, idx[i + 1, j], w*self.D*(ATM_D + OCEAN_D*(oc[i, j] and oc[i + 1, j])))
+                    face(k, idx[i + 1, j], w*self.D*(wa*hm[i] + wo*(oc[i, j] and oc[i + 1, j])))
                 jn = (j + 1) % m
                 w = 1/(1 - self.x[i]**2)/dl**2
-                face(k, idx[i, jn], w*self.D*(ATM_D*ZONAL_K + OCEAN_D*(oc[i, j] and oc[i, jn])))
+                face(k, idx[i, jn], w*self.D*(wa*ZONAL_K + wo*(oc[i, j] and oc[i, jn])))
         L = sp.csr_matrix((vals, (rows, cols)), shape=(self.N, self.N))
         return (L - sp.diags(np.asarray(L.sum(1)).ravel())).tocsc()
 
+    def _transport(self, p_atm):
+        """RT path: atmospheric heat transport scales with column heat capacity / mass (Williams & Kasting 1997:
+        D ~ p cp / m^2): f_D = p_tot cp/cp_air (m_air/m)^2, clipped to [1, D_P_MAX].  Rebuilds Lop when f moves > 3%."""
+        x = p_atm/(self.ps + p_atm); m = x*44. + (1 - x)*28.97; cp = (x*rt.CP_CO2_MOL + (1 - x)*29100.)/m
+        f = float(np.clip((self.ps + p_atm)*cp/1004.*(28.97/m)**2, 1., D_P_MAX))
+        if abs(f/self.f_D - 1) > .03:
+            if getattr(self, "_La", None) is None: self._La, self._Lo = self._laplacian(1., 0.), self._laplacian(0., 1.)
+            self.f_D = f; self._Ldiff = (ATM_D*f*self._La + OCEAN_D*self._Lo).tocsc(); self._set_L()
+        return self.f_D
+    def _set_L(self):
+        self.Lop = self._Ldiff if self._Adv is None else (self._Ldiff + self._Adv).tocsc()
+
+    # ---- optional dynamics / sub-grid physics (GCM2D(physics=...), all off by default) ----
+    def _hadley(self):
+        """'winds': Hadley-cell edge from Held & Hou (1980), phi_H = sqrt(5/3 g H dh / (Omega a)^2) (H 10 km, dh 1/3):
+        ~29 deg on Earth, global on slow rotators.  Meridional atmospheric faces inside phi_H get HADLEY_K x more transport
+        (the thermally direct overturning) relative to Earth's cell: the leaf diffusivity is Earth-calibrated, so an
+        Earth-sized Earth-rotator is unchanged; slow rotators / small planets (wide cells) carry heat poleward far more
+        efficiently, fast rotators less (Kaspi & Showman 2015 trend)."""
+        Om = 7.292e-5*self.spin; a = 6.371e6*self.Rrel; gg = 9.81*np.clip((self.Rrel**3*1.)**.46, .2, 6.)
+        phiH = float(np.clip(np.sqrt(5./3.*gg*1e4/3./(Om*a)**2), .05, np.pi/2)); self.phi_H = phiH
+        xe = np.linspace(-1, 1, self.n + 1)[1:-1]; ph = np.abs(np.arcsin(xe))
+        w = lambda pH: .5*(1 - np.tanh((ph - pH)/.12))
+        return np.clip(1 + HADLEY_K*(w(phiH) - w(PHI_H_EARTH)), .3, None)     # exactly 1 for Earth's rotation and size
+    def _winds(self, T):
+        """'winds': friction-limited thermal wind U(lat) = -(g H/T0) dT/dy f/(f^2 + r^2) (r = 1/RAYLEIGH_D days), from the
+        zonal-mean T gradient; geostrophic flow does not advect T across isotherms, so U only advects zonally (land/sea
+        contrast, downwind moisture).  Upwind flux form, periodic in longitude: rows and columns sum to zero (conservative).
+        Heat uses the boundary-layer share WIND_EFF of the column; moisture uses WIND_Q."""
+        Tz = T.reshape(self.n, self.nlon).mean(1); phi = np.arcsin(self.x); a = 6.371e6*self.Rrel
+        dTdy = np.gradient(Tz, phi)/a; f = 2*7.292e-5*self.spin*np.sin(phi); r = 1/(RAYLEIGH_D*86400.)
+        U = -(self.g*5e3/max(float(Tz.mean()), 100.))*dTdy*f/(f*f + r*r); U = np.clip(U, -60., 60.); self.U = U
+        rate = np.abs(U)*3.156e7/(a*np.sqrt(1 - self.x**2)*2*np.pi/self.nlon)       # 1/yr per band
+        n, m = self.n, self.nlon; idx = np.arange(self.N).reshape(n, m)
+        up = np.where(U[:, None] >= 0, np.roll(idx, 1, 1), np.roll(idx, -1, 1))
+        rr = np.repeat(rate, m)
+        A = sp.csr_matrix((rr, (idx.ravel(), up.ravel())), shape=(self.N, self.N)) - sp.diags(rr)
+        return A.tocsc()
+    def _diurnal(self, Q, alb, B, T):
+        """'diurnal': first daily harmonic of insolation, amplitude (pi/2) Q (1 - alb) cos(lat), on a diurnal skin
+        (C_DIURNAL land / ocean; day = 1/spin days): dT_d = Q1/|i w C + B|, capped at .3 T.  Returns dT_d (cells)."""
+        om = 2*np.pi*365.25*self.spin; Cd = np.where(self.landm.ravel(), C_DIURNAL[0], C_DIURNAL[1])
+        cl = np.repeat(np.sqrt(1 - self.x**2), self.nlon)
+        Q1 = .5*np.pi*Q*(1 - alb)*cl
+        return np.minimum(Q1/np.abs(1j*om*Cd + np.maximum(B, .3)), .3*T)
+    def _clouds(self, T, ice, hh):
+        """'clouds': prognostic cloud condensate path W (kg m^-2), dW/dt = S - W/CLW_TAU with source S from the
+        precipitation field of the moisture solve (moisture supply) x (warm convective + cold stratiform lifting),
+        reduced over ice.  Cover f = 1 - exp(-W/CLW_F); in-cloud optical depth tau = 1.5 W/(rho_w r_e f) (r_e 10 um).
+        Effective deck fraction for the tau-10 tables / non-RT albedo: f (1 - exp(-tau/10))/(1 - e^-1), so cover and
+        opacity (albedo and OLR) both follow the condensate.  Relaxes on ~4 d: at >= monthly steps it sits on its
+        source/sink balance (the difference from the diagnostic scheme is the physics of that balance, not memory)."""
+        pr = getattr(self, "_pr", None); pr = np.ones(self.N) if pr is None else pr
+        cold = np.clip((295. - T)/45., 0., 1.5)
+        Weq = CLW_REF*np.clip(pr, 0, 2.)*(.45 + .55*cold/(1. + .25*es_ratio(float(np.mean(T)))))*(1 - .85*ice)
+        if self.clw is None or len(self.clw) != self.N: self.clw = Weq.copy()
+        self.clw = Weq + (self.clw - Weq)*np.exp(-hh/CLW_TAU)
+        W = self.clw; fc = 1 - np.exp(-W/CLW_F); tau = 1.5*W/(1e3*1e-5*np.maximum(fc, .02))
+        return np.clip(fc*(1 - np.exp(-tau/10.))/(1 - np.exp(-1.)), 0., .9)/RT_CLOUD_K     # same units as cloud_of
+    def _co2_atm(self, pc, T, amp):
+        """RT path: CO2 collapse.  The atmosphere cannot hold more CO2 than the vapour pressure of CO2 ice at the cold
+        trap (coldest zonal band in winter, T - amp/2): the rest sits as surface CO2 ice (self.co2_ice, bar).  Smooth min
+        (p^-4 + p_sat^-4)^-1/4 so the solve stays differentiable.  The carbon cycle keeps the total (C_atm) inventory."""
+        if not rt.PHYS.get("co2_cond", True): return pc
+        Tz = (T - .5*amp).reshape(self.n, self.nlon).mean(1); psat = float(rt.p_sat_co2(float(Tz.min())))/1e5
+        pa = float((max(pc, 1e-12)**-4 + max(psat, 1e-12)**-4)**-.25)
+        self.p_atm, self.co2_ice = pa, max(pc - pa, 0.)
+        return pa
     def _orbit(self, h, t):
         if self.orbit is not None: return self.orbit.at(t)
         return dict(e=float(h.e), varpi=0., obliquity=float(abs(h.tilt)))
@@ -181,8 +267,11 @@ class GCM2D:
         if E.sum() <= 0: return np.where(self.landm, float(np.clip(h.volatiles, 0, 1))*.3, 0.)
         Dq = (MOIST_L*self.Rrel)**2/MOIST_TAU
         Lq = self._lap_unit
-        q = spla.spsolve((sp.identity(self.N, format="csc")/MOIST_TAU - Dq*Lq).tocsc(), E)
+        Mq = sp.identity(self.N, format="csc")/MOIST_TAU - Dq*Lq
+        if "winds" in self.physics and self._Adv is not None: Mq = Mq - WIND_Q/WIND_EFF/C_ATM*self._Adv
+        q = spla.spsolve(Mq.tocsc(), E)
         Pr = q/MOIST_TAU; ref = MOIST_REF*max(float(E[self.oc_m.ravel()].mean()), 1e-9)
+        self._pr = Pr/max(float(Pr.mean()), 1e-12)
         return np.clip(Pr/ref, 0, 1.).reshape(self.n, self.nlon)
     @property
     def _lap_unit(self):
@@ -220,6 +309,8 @@ class GCM2D:
         fv = min(1., h.volatiles/.5)
         rh = np.where(self.landm.ravel(), .35 + .42*self.moist.ravel(), .77)*fv
         rh = np.clip(rh, RH_MIN, .77)
+        pc = self._co2_atm(pc, T, getattr(self, "_amp_cur", np.zeros(self.N)))
+        self._transport(pc)
         pce = P_REF*(max(pc, 1e-9)/P_REF)**(P["co2_sens_K"]/4.)       # co2_sens_K knob rescales the band-model CO2 sensitivity
         cf = np.clip(RT_CLOUD_K*cf, 0., .9)                            # band-model cloud = overcast deck (tau 10); cover calibrated to Earth CRE
         olr, dolr = rt.olr_lookup(tab, T, pce, rh, cf)
@@ -249,10 +340,17 @@ class GCM2D:
         T = self.Tg.ravel().copy(); Td = self.Tdg.ravel().copy()
         amp = self.last.get("amp_g"); amp = np.zeros(self.N) if amp is None or deep_eq and False else amp
         if amp is None or len(amp) != self.N: amp = np.zeros(self.N)
-        ocf = self.oc_m.ravel()
+        ocf = self.oc_m.ravel(); ph = self.physics
+        if "winds" in ph: self._Adv = WIND_EFF*C_ATM*self._winds(T); self._set_L()
+        ad = self.last.get("diurnal_g"); ad = np.zeros(self.N) if ad is None or len(ad) != self.N else ad
         for it in range(k):
-            ice = self.ice_of(T, amp); cf = self.cloud_of(T, ice)
+            self._amp_cur = amp
+            at = np.sqrt(amp**2 + ad**2) if "diurnal" in ph else amp
+            ice = self.ice_of(T, at); cf = self._clouds(T, ice, hh) if "clouds" in ph else self.cloud_of(T, ice)
             asr, olr, B, dg = self._radiation(h, hw, P, T, ice, cf, insr, S0)
+            if "diurnal" in ph:
+                ad = self._diurnal(S0*np.repeat(insr["mean"], self.nlon), dg["alb"], B, T)
+                fx = 1 + 3*(ad/np.maximum(T, 50.))**2; olr = olr*fx; B = B*fx
             if it == 0 or deep_eq:
                 amp = self._season(B, dg["alb"], S0, insr); ice = self.ice_of(T, amp)
                 self.moist = np.where(self.landm, self._moisture(T, ice, h), 1.)
@@ -263,14 +361,22 @@ class GCM2D:
             if not deep_eq: Td = np.where(ocf, Td + hh*self.gam*(T - Td)/self.Cd, T)
         if deep_eq: Td = T.copy()
         self.Tg = T.reshape(self.n, self.nlon); self.Tdg = Td.reshape(self.n, self.nlon)
-        ice = self.ice_of(T, amp); cf = self.cloud_of(T, ice)
+        self._amp_cur = amp
+        at = np.sqrt(amp**2 + ad**2) if "diurnal" in ph else amp
+        ice = self.ice_of(T, at); cf = self._clouds(T, ice, 0.) if "clouds" in ph else self.cloud_of(T, ice)
         asr, olr, B, dg = self._radiation(h, hw, P, T, ice, cf, insr, S0)
+        if "diurnal" in ph:
+            ad = self._diurnal(S0*np.repeat(insr["mean"], self.nlon), dg["alb"], B, T); fx = 1 + 3*(ad/np.maximum(T, 50.))**2; olr = olr*fx; B = B*fx
+        amp_seas = amp; amp = at
         Z = lambda a: a.reshape(self.n, self.nlon).mean(1)
         self.last = dict(ins=dict(mean=insr["mean"], amp=insr["amp"], mu0=insr["mu0"]), amp=Z(amp), ice=Z(ice), cloud=Z(cf), S0=S0,
                          asr=float(asr.mean()), olr=float(olr.mean()), toa_imbalance=float((asr - olr).mean()),
                          g_co2=dg["g_co2"], g_wv=dg["g_wv"], g_cloud=dg["g_cloud"], cloud_mean=float(cf.mean()),
                          amp_g=amp, ice_g=ice, cloud_g=cf, B_g=B, alb_g=dg["alb"],
                          surf_abs=dg.get("surf_abs"), atm_abs=dg.get("atm_abs"))
+        if "diurnal" in ph: self.last.update(diurnal_g=ad, amp_season_g=amp_seas, diurnal_mean_K=float(ad.mean()))
+        if "clouds" in ph: self.last.update(clw_mean=float(self.clw.mean()))
+        if "winds" in ph: self.last.update(U_band=self.U.copy(), phi_H_deg=float(np.degrees(self.phi_H)))
         return self.T
 
     def step(self, h, hw, LP=None, dt_w_yr=1., stress=None, t=None):
@@ -306,13 +412,34 @@ class GCM2D:
                   season_land_K=float(amp[self.landm.ravel()].mean()) if self.landm.any() else 0.,
                   toa_imbalance=float(self.last.get("toa_imbalance", 0.)), climate_model="gcm2d", rt=bool(self.rt),
                   co2_limit_cycle=self.limit_cycle)
-        if self.rt: st.update(rt_surf_abs=self.last.get("surf_abs"), rt_atm_abs=self.last.get("atm_abs"), planetary_albedo=float(np.mean(self.last["alb_g"])))
+        if self.rt:
+            asr = float(self.last.get("asr", 0.)); lim = rt.runaway_limit(self.g)
+            st.update(rt_surf_abs=self.last.get("surf_abs"), rt_atm_abs=self.last.get("atm_abs"), planetary_albedo=float(np.mean(self.last["alb_g"])),
+                      pCO2_atm_bar=None if self.p_atm is None else float(self.p_atm), co2_ice_bar=float(self.co2_ice), transport_f=float(self.f_D),
+                      runaway=bool(asr > lim and self.ocean > .05), runaway_limit=lim, moist_greenhouse=bool(float(Tg.max()) > rt.T_MOIST_GH))
+        if self.physics:                                      # optional-physics diagnostics (absent by default -> packets unchanged)
+            st.update({k: self.last[k] for k in ("diurnal_mean_K", "clw_mean", "phi_H_deg") if k in self.last},
+                      gcm_physics=sorted(self.physics))
         if dT_imp:
             Tc = self.Tg.ravel(); wc = .5*(wf(Tc - amp) + wf(Tc + amp)); wc = np.where(self.landm.ravel(), wc*self.moist.ravel(), wc)
             st["water_chronic"] = float(wc.mean()); st["lat_water_chronic"] = [round(float(v), 4) for v in wc.reshape(self.n, self.nlon).mean(1)]
         return ClimateStress(cs.T_K, float(wcell.mean()), cs.climate_class, st)
 
 RH_MIN = .05
+# optional GCM2D physics (physics=("clouds", "diurnal", "winds") / --gcm-physics); off by default
+GCM_PHYSICS = ("clouds", "diurnal", "winds")
+CLW_TAU, CLW_REF, CLW_F = .011, .05, .06      # yr condensate lifetime (~4 d); kg m^-2 source scale; cover e-fold path
+C_DIURNAL = (.016, .16)                        # W yr m^-2 K^-1 diurnal skin: land (~10 K swing on Earth), ocean (~1 K)
+HADLEY_K = 1.5; RAYLEIGH_D = 5.; PHI_H_EARTH = .5047               # Hadley transport boost inside phi_H; Rayleigh friction time (days)
+C_ATM, WIND_EFF, WIND_Q = .32, .1, .3          # column heat capacity (W yr m^-2 K^-1); BL share for heat; moisture share
+def parse_physics(p):
+    if not p: return frozenset()
+    if isinstance(p, str): p = [x.strip() for x in p.split(",") if x.strip()]
+    p = set(GCM_PHYSICS) if "all" in p else set(p)
+    bad = p - set(GCM_PHYSICS)
+    if bad: raise ValueError(f"unknown gcm2d physics {sorted(bad)}; choose from {GCM_PHYSICS} or 'all'")
+    return frozenset(p)
+D_P_MAX = 10.         # cap on the pressure scaling of atmospheric heat transport (RT path)
 RT_CLOUD_K = 2.0
 
 
@@ -334,12 +461,12 @@ class GCMCarbon(bgc_mod.CarbonCycle):
 
 _EQ_CACHE = {}
 
-def init_gcm2d(h, hw, LP=None, orbit=None, rt_on=False, nlon=N_LON, warm_branch=True):
+def init_gcm2d(h, hw, LP=None, orbit=None, rt_on=False, nlon=N_LON, warm_branch=True, physics=()):
     """(GCM2D, GCMCarbon) at the carbon-silicate equilibrium (cached)."""
-    P = as_bus(LP); g = GCM2D(h, P, hw, nlon=nlon, orbit=orbit, rt_on=rt_on, spinup=False); cc = GCMCarbon(h, g, P)
+    P = as_bus(LP); g = GCM2D(h, P, hw, nlon=nlon, orbit=orbit, rt_on=rt_on, spinup=False, physics=physics); cc = GCMCarbon(h, g, P)
     key = (round(h.a, 9), round(h.e, 9), round(h.tilt, 9), round(h.spin, 9), h.ptype, round(h.volatiles, 9), round(h.m, 12), getattr(h, "planet_id", 0),
            round(float(getattr(hw, "L_star", h.L_star)), 9), tuple(round(P[k], 9) for k in ("greenhouse_K", "albedo_mult", "lat_diffusion", "co2_sens_K", "snowball_K", "runaway_K")),
-           None if orbit is None else orbit.key(), bool(rt_on), nlon, bool(warm_branch), "g2")
+           None if orbit is None else orbit.key(), bool(rt_on), nlon, bool(warm_branch), "g3", rt.phys_key() if rt_on else None, tuple(sorted(g.physics)))
     if key in _EQ_CACHE:
         cc.C_atm, T, Td, mo, g.limit_cycle = _EQ_CACHE[key]; g.Tg, g.Tdg, g.moist = T.copy(), Td.copy(), mo.copy()
         g.pCO2 = cc.pCO2(P_REF); g.integrate(h, hw, P, 1., 0.)

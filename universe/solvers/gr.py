@@ -10,8 +10,14 @@ Geometrized units G = c = 1 with lengths/times in units of the hole mass M unles
   * Peters (1964) orbit-averaged GW inspiral: da/dt, de/dt integrated (solve_ivp, stiff-safe) to coalescence; circular
     closed form T = 5 a^4 / (256 m1 m2 (m1+m2)) used as a test; chirp mass, GW frequency.
   * event_fields(): extra strong-field fields for leaves/events TDE / AGN / SMBH-merger log entries.
+  * Merger remnant (Rezzolla et al. 2008 aligned-spin final spin; Barausse et al. 2012 radiated energy) and the l=m=2, n=0
+    Kerr quasi-normal ringdown (Berti, Cardoso & Will 2006 fits: f_220, damping time, quality factor).
+  * Optional dynamics (events gr_solver="dynamics"): Kerr-matched Paczynski-Wiita pseudo-Newtonian pull
+    a = -M/(r - r_isco/3)^2 (exact Keplerian far field; ISCO at the Kerr prograde r_isco) on stars near SMBHs, and a Kerr
+    marginally-bound capture gate (r_mb = 2 - a + 2 sqrt(1-a)) that swallows stars whole (no flare / AGN fuel).
+    At galactic resolution (softening >> r_g) the PW term is numerically negligible; the capture gate is what changes runs.
 Fidelity / gaps: test-particle geodesics (no self-force, no spin-curvature coupling); vacuum Kerr (no accretion-disk
-radiative transfer); Peters is leading-order (0PN radiation reaction, no ringdown/NR merger)."""
+radiative transfer); Peters is leading-order (0PN radiation reaction); remnant/ringdown are NR fits, no merger waveform."""
 import numpy as np
 from scipy.integrate import solve_ivp
 
@@ -126,6 +132,49 @@ def inspiral(a_au, e0, m1, m2, a_stop_M=6.):
     return dict(t_yr=t, a_au=np.exp(sol.t)*M_SUN_AU, e=sol.y[1], t_merge_yr=float(t[-1]))
 
 def f_gw_isco_hz(M_sun): return float(1/(np.pi*6**1.5*M_sun*M_SUN_S))
+
+
+# ----------------------------------------------------------------- merger remnant + ringdown
+def remnant(m1, m2, chi1=0., chi2=0.):
+    """Final mass/spin of a BBH merger with aligned spins.  chi_f: Rezzolla et al. (2008); E_rad: Barausse et al. (2012)."""
+    M = m1 + m2; q = min(m1, m2)/max(m1, m2); nu = m1*m2/M**2
+    c1, c2 = (chi1, chi2) if m1 >= m2 else (chi2, chi1); at = (c1 + c2*q*q)/(1 + q*q)
+    s4, s5, t0, t2, t3 = -.1229, .4537, -2.8904, -3.5171, 2.5763
+    chi = float(np.clip(at + at*nu*(s4*at + s5*nu + t0) + nu*(2*np.sqrt(3) + t2*nu + t3*nu*nu), -.998, .998))
+    Ei = lambda a: circular(r_isco(abs(a), a >= 0), abs(a), a >= 0)["E"]
+    p0, p1 = .04827, .01707
+    Erad = nu*(1 - Ei(at)) + 4*nu*nu*(4*p0 + 16*p1*at*(at + 1) + Ei(at) - 1)
+    return dict(M_f=float(M*(1 - Erad)), chi_f=chi, E_rad_frac=float(Erad))
+
+def qnm_220(M_msun, chi):
+    """Fundamental l=m=2 Kerr ringdown (Berti+06 fits): f [Hz], damping time tau [s], quality factor Q."""
+    j = min(abs(float(chi)), .998)
+    w = 1.5251 - 1.1568*(1 - j)**.1292; Q = .7 + 1.4187*(1 - j)**-.4990
+    f = w/(2*np.pi*M_msun*M_SUN_S); return dict(f_hz=float(f), tau_s=float(Q/(np.pi*f)), Q=float(Q), Mw=float(w))
+
+def ringdown_fields(m1_msun, m2_msun, chi1=0., chi2=0.):
+    r = remnant(m1_msun, m2_msun, chi1, chi2); q = qnm_220(r["M_f"], r["chi_f"])
+    return dict(gr_M_final_msun=r["M_f"], gr_chi_final=r["chi_f"], gr_E_rad_frac=r["E_rad_frac"],
+                gr_ringdown_f_hz=q["f_hz"], gr_ringdown_tau_s=q["tau_s"], gr_ringdown_Q=q["Q"])
+
+
+# ----------------------------------------------------------------- optional dynamics (pseudo-Newtonian, Kerr-matched)
+def pw_rs(a=0.):
+    """PW 'Schwarzschild radius' (units of r_g) whose ISCO (= 3 r_s) matches the Kerr prograde ISCO."""
+    return r_isco(abs(a), a >= 0)/3.
+
+def pw_correction(dx, M, rs, soft2=0.):
+    """Extra acceleration a_PW - a_Newton on bodies at separation dx (N,3) from a hole of mass M (G=1) with PW radius rs
+    (same length units as dx).  Zero beyond 1e6 rs (and inside the softening the Newtonian softened force is kept)."""
+    r = np.sqrt((dx*dx).sum(1) + soft2); out = np.zeros_like(dx)
+    k = (r < 1e6*rs) & (r > 1.05*rs)
+    if k.any():
+        rk = r[k]; out[k] = -(M*(1/(rk - rs)**2 - 1/rk**2)/rk)[:, None]*dx[k]
+    return out
+
+def capture_radius(a=0.):
+    """Kerr marginally-bound (parabolic) capture pericentre in r_g (prograde equatorial): 2 - a + 2 sqrt(1 - a)."""
+    a = abs(float(a)); return float(2 - a + 2*np.sqrt(1 - a))
 
 
 # ----------------------------------------------------------------- events hook

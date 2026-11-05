@@ -22,9 +22,20 @@ Fidelity (documented, tested in test_solvers.py)
   * Calibrated to Earth-like column within ~10 W m^-2 (clear-sky OLR ~ 265 W m^-2 at Ts=288,
     RH .77, 280 ppm).  2xCO2 instantaneous forcing a few W m^-2, ~logarithmic in pCO2;
     clear-sky dOLR/dTs at fixed RH ~ 1.5-2.2 W m^-2 K^-1 (water vapour feedback present).
-  * NOT line-by-line, no CIA (high-pCO2 / H2-rich atmospheres under-absorb), no runaway steam
-    atmosphere (q capped), no 3-D clouds; temperature dependence of line strengths ignored.
-    It is an honest band model, not a GCM radiation package.
+  * Dense / cold atmospheres (PHYS switches, all on; tables are keyed on them):
+      - CIA: CO2-CO2 (far-IR rototranslational + 7-8 um dimer band), N2-N2 and CO2-H2 (Wordsworth et
+        al. 2017 / Ramirez 2014 magnitudes) as grey per-band binary absorption tau = alpha n_i n_j dz (amagat^2),
+        alpha ~ (T/250)^-1.5.  Column(..., x_h2=) adds H2 to the background gas.
+      - CO2 thermodynamics: mixture R and cp (dense CO2 has a steeper dry adiabat, heavier mean mass).
+      - CO2 condensation: T >= T_sat_co2(x_co2 p) (Clausius-Clapeyron from the triple point): the upper troposphere of a
+        dense CO2 atmosphere rides the frost curve.  This is the physics of the CO2 *maximum greenhouse*: past a few bar,
+        adding CO2 raises OLR-limiting levels onto the warm frost curve and Rayleigh albedo, so it cools (Kasting 1991).
+      - CO2-ice clouds where the column is saturated: an IR-scattering screen (Forget & Pierrehumbert 1997 scattering
+        greenhouse, coverage CO2CLD_F = .5 -- partial cover per Colaprete & Toon 2003 / Kitzmann 2016) and a SW layer.
+      - Runaway: olr_lookup blends to the Simpson-Nakajima limit (runaway_limit(g)) above RG_T0 for moist columns.
+  * NOT line-by-line; CIA is band-grey; no steam-atmosphere profile (q capped, runaway via a limit, not solved);
+    no 3-D clouds; temperature dependence of line strengths ignored.  It is an honest band model, not a GCM radiation
+    package.
 """
 from functools import lru_cache
 import numpy as np
@@ -55,12 +66,50 @@ SW_CO2 = [(0., 0.), (0., 0.), (0., 0.), (.02, 2.5)]
 CLOUD_TAU_SW, CLOUD_G, CLOUD_W = 10., .85, np.array([.9999, .9999, .998, .97])
 CLOUD_TAU_LW, CLOUD_SIG = 8., .5             # cloud deck in the layer nearest p = .5 ps (ISCCP mean cloud-top ~ 500-600 hPa)
 
+# ---- collision-induced absorption: band-averaged binary coefficients (cm^-1 amagat^-2 at 250 K, x (T/250)^-1.5).
+# CO2-CO2: roto-translational band below ~350 cm^-1 plus the 1200-1500 cm^-1 dimer/Fermi-dyad CIA (Gruszka & Borysow 1997;
+# Baranov et al. 2004; as used by Wordsworth et al. 2010), sub-Lorentzian far-wing continuum lumped into 350-500 cm^-1.
+# N2-N2 roto-translational (Borysow & Frommhold 1986, tiny at 1 bar).  CO2-H2 (Wordsworth et al. 2017; opt-in via x_h2).
+# Binary in density, so at Earth's 280 ppm the CO2 term is ~1e-7 of a 1-bar column: Earth calibration is unchanged.
+CIA_CO2 = np.array([1.5e-6, 1e-7, 0., 0., 0., 0., 0., 4e-7, 5e-8, 0., 0.])
+CIA_N2 = np.array([3e-8, 2e-9, 0., 0., 0., 0., 0., 0., 0., 0., 0.])
+CIA_CO2H2 = np.array([4e-6, 3e-6, 1e-6, 0., 0., 0., 0., 2e-7, 0., 0., 0.])
+N_LOSCH, KB, AMU = 2.6868e25, 1.380649e-23, 1.66054e-27
+CP_CO2_MOL = 37100.                          # J kmol^-1 K^-1 (cp/R ~ 4.46 at 250 K) -> CO2 atmospheres have a shallower adiabat
+# ---- CO2 condensation (Clausius-Clapeyron fits through the triple point; sublimation below, vaporisation above)
+CO2_TP, CO2_PTP, CO2_LSUB_R, CO2_LVAP_R = 216.58, 5.185e5, 3127., 2000.
+# CO2-ice cloud deck where the adiabat meets the saturation curve: scattering greenhouse (Forget & Pierrehumbert 1997)
+# as an IR-reflecting screen (R_LW per unit cover) plus a conservative-scattering SW layer (tau_sw per unit cover, g .8).
+CO2CLD_F, CO2CLD_R_LW, CO2CLD_TAU_SW, CO2CLD_NSAT = .5, .5, 4., 4
+# ---- soft runaway: the moist OLR asymptote (Simpson-Nakajima; ~282 W m^-2 at 1 g, Goldblatt et al. 2013), weakly rising with g
+# (Kopparapu et al. 2014).  The band model caps q at e<=.5p, so the coupled lookup blends toward the limit for Ts in RG_T0..RG_T1.
+OLR_RG, RG_G_EXP, RG_T0, RG_T1, T_MOIST_GH = 282., .12, 300., 360., 340.
+# physics switches (all on; tests toggle them to measure each piece).  Part of the climate_tables cache key via phys_key().
+PHYS = dict(cia=True, co2_thermo=True, co2_cond=True, co2_cloud=True, runaway=True)
+def phys_key(): return tuple(sorted(PHYS.items()))
+
 
 # ----------------------------------------------------------------------------- thermodynamics
 def e_sat(T):
     T = np.asarray(T, float)
     lv = np.where(T >= 273.15, LV, LV + 3.34e5)
     return 611.2 * np.exp(lv / RV * (1. / 273.15 - 1. / np.maximum(T, 100.)))
+
+def p_sat_co2(T):
+    """CO2 saturation vapour pressure (Pa) over ice (T < 216.58 K) or liquid."""
+    T = np.maximum(np.asarray(T, float), 40.)
+    LR = np.where(T < CO2_TP, CO2_LSUB_R, CO2_LVAP_R)
+    return CO2_PTP * np.exp(-LR * (1. / T - 1. / CO2_TP))
+
+def T_sat_co2(p_co2):
+    """Inverse of p_sat_co2: frost/dew point (K) of CO2 at partial pressure p_co2 (Pa)."""
+    lp = np.log(np.maximum(np.asarray(p_co2, float), 1e-12) / CO2_PTP)
+    LR = np.where(lp < 0., CO2_LSUB_R, CO2_LVAP_R)
+    return 1. / (1. / CO2_TP - lp / LR)
+
+def runaway_limit(g=G_EARTH):
+    """Moist (runaway) OLR limit (W m^-2) at surface gravity g."""
+    return float(OLR_RG * (max(float(g), .5) / G_EARTH) ** RG_G_EXP)
 
 def q_sat(T, p):
     e = np.minimum(e_sat(T), .5 * p)          # cap: no steam atmosphere
@@ -74,7 +123,7 @@ def levels(ps, n=N_LAYERS, top=1e-4):
     pm = np.concatenate([.5 * e[..., :1], np.sqrt(e[..., :-1] * e[..., 1:])], -1)
     return pe, pm
 
-def moist_profile(Ts, p, ps, T_strat=200., rh_s=.77, lapse_mix=1.):
+def moist_profile(Ts, p, ps, T_strat=200., rh_s=.77, lapse_mix=1., rd=RD, cp=CP):
     """Moist pseudo-adiabat from (Ts, ps) evaluated at pressures p (..., k) (any order),
     floored at T_strat; lapse_mix<1 blends toward dry adiabat (more stable)."""
     Ts = np.asarray(Ts, float); ps = np.asarray(ps, float)
@@ -85,8 +134,8 @@ def moist_profile(Ts, p, ps, T_strat=200., rh_s=.77, lapse_mix=1.):
     T = np.empty(L.shape); T[..., 0] = Ts
     def dTdlnp(T, lp):
         pp = np.exp(lp); rs = q_sat(T, pp) * rh_s
-        moist = (RD * T / CP) * (1 + LV * rs / (RD * T)) / (1 + LV * LV * rs * EPS / (CP * RD * T * T))
-        return lapse_mix * moist + (1 - lapse_mix) * RD * T / CP
+        moist = (rd * T / cp) * (1 + LV * rs / (rd * T)) / (1 + LV * LV * rs * EPS / (cp * rd * T * T))
+        return lapse_mix * moist + (1 - lapse_mix) * rd * T / cp
     for i in range(1, L.shape[-1]):
         h = L[..., i] - L[..., i - 1]; t0 = T[..., i - 1]
         k1 = dTdlnp(t0, L[..., i - 1]); k2 = dTdlnp(t0 + .5 * h * k1, L[..., i - 1] + .5 * h)
@@ -140,23 +189,34 @@ def stellar_sw_fractions(T_eff):
 class Column:
     """A set of atmospheric columns (leading batch shape) with layers ordered top -> surface."""
     def __init__(self, Ts, ps=1., pco2=2.8e-4, rh_s=.77, x_ch4=7e-7, o3_du=0., g=G_EARTH, T_strat=None,
-                 n=N_LAYERS, cloud=0., T_profile=None):
+                 n=N_LAYERS, cloud=0., T_profile=None, x_h2=0.):
         Ts = np.atleast_1d(np.asarray(Ts, float))
         shp = Ts.shape
         b = lambda v: np.broadcast_to(np.asarray(v, float), shp).astype(float)
         self.Ts, self.pco2, self.g = Ts, b(pco2), b(g)
-        self.ps = (b(ps) + self.pco2) * 1e5                  # N2 background + CO2 (bar -> Pa)
+        self.ps = (b(ps) + self.pco2) * 1e5                  # N2 background (+ optional H2 share x_h2) + CO2 (bar -> Pa)
         self.pe, self.pm = levels(self.ps, n)
         if T_strat is None: T_strat = np.clip(.62 * Ts, 150., 230.)          # first guess; radiation() refines to skin T
         self.T_strat = b(T_strat)
+        x_co2 = self.pco2 * 1e5 / self.ps
+        self.x_co2, self.x_h2 = x_co2, b(x_h2); self.x_n2 = np.maximum(1 - x_co2 - self.x_h2, 0.)
+        mbar = x_co2 * M_CO2 + (1 - x_co2) * M_AIR + self.x_h2 * (2. - M_AIR)
+        if PHYS["co2_thermo"]:                                # mixture R and cp: CO2-rich air has a shallower dry adiabat
+            rd = RD * M_AIR / mbar; cp = (x_co2 * CP_CO2_MOL + (1 - x_co2) * CP * M_AIR) / mbar
+        else: rd, cp = RD, CP
         both = np.concatenate([self.pm, self.pe], -1)
-        Tb = moist_profile(Ts, both, self.ps, self.T_strat, float(np.mean(rh_s)))
+        Tb = moist_profile(Ts, both, self.ps, self.T_strat, float(np.mean(rh_s)), rd=rd, cp=cp)
+        self.co2_cloud = np.zeros(shp); self.icc = np.full(shp, n - 1); self.co2_sat = np.zeros(shp + (n,), bool)
+        if PHYS["co2_cond"]:                                  # T(p) >= CO2 frost point of the CO2 partial pressure (Kasting 1991)
+            Tsat = T_sat_co2(x_co2[..., None] * both); sat = Tsat > Tb
+            if sat.any():
+                Tb = np.maximum(Tb, Tsat); sm = sat[..., :n]; self.co2_sat = sm
+                ns = sm.sum(-1); self.icc = np.where(ns > 0, n - 1 - np.argmax(sm[..., ::-1], -1), n - 1)
+                if PHYS["co2_cloud"]: self.co2_cloud = CO2CLD_F * np.clip(ns / CO2CLD_NSAT, 0., 1.)
         self.Tm = Tb[..., :n] if T_profile is None else T_profile
         self.Te = Tb[..., n:]; self.Te[..., -1] = Ts
         self.rh_s = b(rh_s)
         self.q = humidity(self.Tm, self.pm, self.ps, self.rh_s[..., None])
-        x_co2 = self.pco2 * 1e5 / self.ps
-        mbar = x_co2 * M_CO2 + (1 - x_co2) * M_AIR
         self.mbar = mbar
         self.q_co2 = (x_co2 * M_CO2 / mbar)[..., None] * np.ones_like(self.Tm)
         self.q_ch4 = (b(x_ch4) * M_CH4 / mbar)[..., None] * np.ones_like(self.Tm)
@@ -184,9 +244,18 @@ def lw_optical_depth(c):
     pfac = np.maximum(c.pm / P0, 1e-3)
     e = c.q * c.pm / EPS
     taus, wts, bidx = [], [], []
+    cia = PHYS["cia"]
+    if cia:                                                   # binary absorption: tau = alpha n_i n_j dz (amagat^2 cm)
+        nd = c.pm / (KB * c.Tm) / N_LOSCH
+        dz_cm = c.dm / (c.pm * c.mbar[..., None] * AMU / (KB * c.Tm)) * 100.
+        tf = (np.maximum(c.Tm, 50.) / 250.) ** -1.5 * dz_cm * nd * nd
+        xc, xn, xh = c.x_co2[..., None], c.x_n2[..., None], c.x_h2[..., None]
+        pc_, pn_, ph_ = xc * xc * tf, xn * xn * tf, xc * xh * tf
     for b in range(len(LW_BANDS)):
         kh, kc = _kpoints(*K_H2O[b]), _kpoints(*K_CO2[b])
         grey = (K_CH4[b] * c.q_ch4 + K_O3[b] * c.q_o3) * c.dm
+        if cia and (CIA_CO2[b] or CIA_N2[b] or CIA_CO2H2[b]):
+            grey = grey + CIA_CO2[b] * pc_ + CIA_N2[b] * pn_ + CIA_CO2H2[b] * ph_
         if b in CONT_BANDS:
             kcont = CONT_K[CONT_BANDS.index(b)] * (e / 1.5e3) * np.exp(1800. * (1. / c.Tm - 1. / 296.))
             grey = grey + kcont * c.q * c.dm
@@ -217,6 +286,21 @@ def lw(c, overcast=False, eps_s=1.):
     up[..., nl, :] = eps_s * Bs + (1 - eps_s) * dn[..., nl, :]
     for i in range(nl - 1, -1, -1):
         up[..., i, :] = up[..., i + 1, :] * t[..., i, :] + Bm[..., i, :] * (1 - t[..., i, :]) + (Bm[..., i + 1, :] - Bm[..., i, :]) * lin[..., i, :]
+    if PHYS["co2_cloud"] and np.any(c.co2_cloud > 0):
+        # CO2-ice scattering screen at the top edge of the condensation base layer icc.  Absorption-only layers and a black
+        # surface make the upwelling flux reaching the screen independent of the downwelling one (and vice versa), so one
+        # re-sweep on each side is exact for a single non-absorbing screen of reflectance R.
+        R = (CO2CLD_R_LW / CO2CLD_F * c.co2_cloud)[..., None]
+        ke = c.icc[..., None, None] * np.ones((1, Bm.shape[-1]), int)
+        Da = np.take_along_axis(dn, ke, -2)[..., 0, :]; Ub = np.take_along_axis(up, ke, -2)[..., 0, :]
+        dS, uS = (1 - R) * Da + R * Ub, (1 - R) * Ub + R * Da
+        at = (np.arange(nl + 1) == c.icc[..., None])[..., None]
+        for i in range(nl):
+            dn[..., i, :] = np.where(at[..., i, :], dS, dn[..., i, :])
+            dn[..., i + 1, :] = dn[..., i, :] * t[..., i, :] + Bm[..., i + 1, :] * (1 - t[..., i, :]) + (Bm[..., i, :] - Bm[..., i + 1, :]) * lin[..., i, :]
+        for i in range(nl - 1, -1, -1):
+            up[..., i + 1, :] = np.where(at[..., i + 1, :], uS, up[..., i + 1, :])
+            up[..., i, :] = up[..., i + 1, :] * t[..., i, :] + Bm[..., i, :] * (1 - t[..., i, :]) + (Bm[..., i + 1, :] - Bm[..., i, :]) * lin[..., i, :]
     return up.sum(-1), dn.sum(-1)
 
 
@@ -288,9 +372,13 @@ def sw(c, mu0=.5, alb_s=.1, T_eff=5772., overcast=False):
         if overcast:
             sel = np.zeros(c.Tm.shape, bool); np.put_along_axis(sel, c.icld[..., None], True, -1)
             tc = np.where(sel[..., None], CLOUD_TAU_SW, 0.) * np.ones(ng)
-        tt = ta + tR + tc
-        w = (tR + CLOUD_W[b] * tc) / np.maximum(tt, 1e-12)
-        gg = CLOUD_G * CLOUD_W[b] * tc / np.maximum(tR + CLOUD_W[b] * tc, 1e-12)
+        tq = 0.
+        if PHYS["co2_cloud"] and np.any(c.co2_cloud > 0):         # CO2-ice deck: conservative scatterer, g .8
+            selq = np.zeros(c.Tm.shape, bool); np.put_along_axis(selq, c.icc[..., None], True, -1)
+            tq = np.where(selq, CO2CLD_TAU_SW / CO2CLD_F * c.co2_cloud[..., None], 0.)[..., None] * np.ones(ng)
+        tt = ta + tR + tc + tq
+        w = (tR + CLOUD_W[b] * tc + tq) / np.maximum(tt, 1e-12)
+        gg = (CLOUD_G * CLOUD_W[b] * tc + .8 * tq) / np.maximum(tR + CLOUD_W[b] * tc + tq, 1e-12)
         mm = mu0[..., None]
         Rd, Td, Rr, Tr, Tdb = two_stream_layer(tt, w, gg, mm)
         mv = lambda a: np.moveaxis(a, -1, 0)
@@ -302,13 +390,13 @@ def sw(c, mu0=.5, alb_s=.1, T_eff=5772., overcast=False):
 
 # ----------------------------------------------------------------------------- column API
 def radiation(Ts, S_toa=340., mu0=.5, alb_s=.1, pco2=2.8e-4, rh_s=.77, x_ch4=7e-7, o3_du=0., ps=1., g=G_EARTH,
-              T_eff=5772., cloud=0., T_strat=None, n=N_LAYERS, column=None):
+              T_eff=5772., cloud=0., T_strat=None, n=N_LAYERS, column=None, x_h2=0.):
     """Full column diagnostics: OLR, ASR, fluxes at edges and heating rates (K/day).
     S_toa = mean incident flux (W m^-2) on the horizontal at the top (S0/4 for global mean)."""
-    c = column or Column(Ts, ps, pco2, rh_s, x_ch4, o3_du, g, T_strat, n)
+    c = column or Column(Ts, ps, pco2, rh_s, x_ch4, o3_du, g, T_strat, n, x_h2=x_h2)
     if T_strat is None and column is None:
         U, _ = lw(c); Tsk = np.clip((U[..., 0] / (2 * SIGMA)) ** .25, 120., 260.)
-        c = Column(Ts, ps, pco2, rh_s, x_ch4, o3_du, g, Tsk, n)
+        c = Column(Ts, ps, pco2, rh_s, x_ch4, o3_du, g, Tsk, n, x_h2=x_h2)
     Ucl, Dcl = lw(c); Uov, Dov = lw(c, overcast=True)
     cf = np.asarray(cloud, float)[..., None] if np.ndim(cloud) else cloud
     Ul = (1 - cf) * Ucl + cf * Uov; Dl = (1 - cf) * Dcl + cf * Dov
@@ -363,20 +451,24 @@ LCO2_GRID = np.linspace(-6., np.log10(30.), 10)
 MU_GRID = np.array([.15, .3, .45, .6, .8])
 RH_GRID = np.array([.35, .77])
 
-@lru_cache(maxsize=16)
-def climate_tables(g=G_EARTH, T_eff=5772., x_ch4=7e-7, o3_du=0., ps=1.):
+def climate_tables(g=G_EARTH, T_eff=5772., x_ch4=7e-7, o3_du=0., ps=1., x_h2=0.):
+    """Cached on the arguments and the PHYS switches (phys_key())."""
+    return _climate_tables(float(g), float(T_eff), float(x_ch4), float(o3_du), float(ps), float(x_h2), phys_key())
+
+@lru_cache(maxsize=24)
+def _climate_tables(g, T_eff, x_ch4, o3_du, ps, x_h2, _phys):
     """OLR[clear/overcast](RH, Ts, log pCO2) and SW atmosphere coefficients
     (R, X, R*, Tt) [clear/overcast](Ts, log pCO2, mu0) so that for surface albedo a:
         alpha_p = R + a X / (1 - a R*),   surface absorbed = Tt (1-a)/(1-a R*)."""
     Ts, L = np.meshgrid(TS_GRID, LCO2_GRID, indexing="ij")
     olr = np.empty((2, len(RH_GRID)) + Ts.shape)
     for k, rh in enumerate(RH_GRID):
-        c = Column(Ts, ps, 10 ** L, rh, x_ch4, o3_du, g, 200.)
+        c = Column(Ts, ps, 10 ** L, rh, x_ch4, o3_du, g, 200., x_h2=x_h2)
         U, _ = lw(c); Tsk = np.clip((U[..., 0] / (2 * SIGMA)) ** .25, 120., 260.)
-        c = Column(Ts, ps, 10 ** L, rh, x_ch4, o3_du, g, Tsk)
+        c = Column(Ts, ps, 10 ** L, rh, x_ch4, o3_du, g, Tsk, x_h2=x_h2)
         olr[0, k] = lw(c)[0][..., 0]; olr[1, k] = lw(c, overcast=True)[0][..., 0]
     TT, LL, MM = np.meshgrid(TS_GRID, LCO2_GRID, MU_GRID, indexing="ij")
-    c = Column(TT, ps, 10 ** LL, .77, x_ch4, o3_du, g, 200.)
+    c = Column(TT, ps, 10 ** LL, .77, x_ch4, o3_du, g, 200., x_h2=x_h2)
     swc = np.empty((2, 4) + TT.shape)
     for ov in (0, 1):
         p = {}
@@ -387,7 +479,7 @@ def climate_tables(g=G_EARTH, T_eff=5772., x_ch4=7e-7, o3_du=0., ps=1.):
         Rs = np.clip((y1 - 2 * y5) / np.where(np.abs(y1 - y5) < 1e-9, 1e-9, y1 - y5), 0., .99)
         X = y1 * (1 - Rs); Tt = p[0.][1]
         swc[ov] = np.stack([R, X, Rs, Tt])
-    return dict(olr=olr, sw=swc)
+    return dict(olr=olr, sw=swc, g=g, runaway=bool(PHYS["runaway"]))
 
 
 def _interp_idx(grid, v):
@@ -412,7 +504,22 @@ def olr_lookup(tab, Ts, pco2, rh=.77, cloud=0.):
     lo = Ts < TS_GRID[0]; hi = Ts > TS_GRID[-1]
     v = (1 - cloud) * v0 + cloud * v1; d = (1 - cloud) * d0 + cloud * d1
     v = np.where(lo, v + ext * (Ts - TS_GRID[0]), np.where(hi, v + ext * (Ts - TS_GRID[-1]) * .3, v))
+    if tab.get("runaway"):
+        v, d = runaway_blend(v, d, Ts, rh, tab["g"])
     return v, np.maximum(d, .3)
+
+def runaway_blend(v, d, Ts, rh, g):
+    """Soft runaway / moist-greenhouse branch.  The column caps q (no steam atmosphere), so its OLR keeps rising with Ts;
+    a real water-rich column saturates at the Simpson-Nakajima limit runaway_limit(g) (~282 W m^-2 at 1 g; Goldblatt et
+    al. 2013) once Ts > ~RG_T0.  Blend toward min(v, limit) with weight smoothstep((Ts - RG_T0)/(RG_T1 - RG_T0)) x
+    (rh/.77): dry land columns keep their (non-runaway) OLR.  Off below RG_T0 -- Earth-like values are untouched.
+    A planet whose ASR exceeds the limit then warms past the table edge (runaway; see GCM2D.last['runaway'])."""
+    Ts = np.asarray(Ts, float); lim = runaway_limit(g)
+    w = np.clip((Ts - RG_T0) / (RG_T1 - RG_T0), 0., 1.); w = w * w * (3 - 2 * w) * np.clip(np.asarray(rh, float) / .77, 0., 1.)
+    if not np.any(w > 0): return v, d
+    cap = lim + 25. * np.tanh((v - lim) / 25.)                   # smooth min(v, lim) with a little headroom
+    cap = np.where(v < lim, v, cap); dcap = np.where(v < lim, d, d / np.cosh((v - lim) / 25.) ** 2)
+    return v * (1 - w) + cap * w, d * (1 - w) + dcap * w
 
 def sw_lookup(tab, Ts, pco2, mu0, alb_s, cloud=0.):
     """Planetary albedo and fraction of TOA flux absorbed by the surface / atmosphere."""
