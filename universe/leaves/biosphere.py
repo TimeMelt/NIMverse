@@ -21,13 +21,15 @@ def seed(bio, gate, amount=1e-3):
     if gate.fired and not bio.alive: bio.P, bio.D, bio.alive, bio.diversity = amount, amount*.1, True, 1.
     return bio
 
-def step(bio, climate, chem, LP=None, dt_w_yr=1., disturbance=0.):
-    """Returns (bio, NicheOffer, BioSignFlux). disturbance in [0,1] kills that biomass fraction."""
+def step(bio, climate, chem, LP=None, dt_w_yr=1., disturbance=0., growth_mult=1., ledger=None):
+    """Returns (bio, NicheOffer, BioSignFlux). disturbance in [0,1] kills that biomass fraction. growth_mult: nutrient limitation
+    (leaves.biogeochem); ledger (dict) receives loss = biomass removed by mortality + disturbance (for the C/N/P books)."""
     P_ = as_bus(LP); K = capacity(climate, chem); b = Biosphere(**bio.to_dict()); st = climate.stressors or {}
     disturbance = 1 - (1-min(disturbance, 1.))*(1-st.get("impact_kill", 0.))*(1-st.get("uv_kill", 0.))*(1-st.get("tech_kill", 0.))   # ClimateStress shocks
-    if disturbance: f = 1-min(disturbance, 1.); b.P, b.C, b.D = b.P*f, b.C*f, b.D*f
+    loss = 0.
+    if disturbance: f = 1-min(disturbance, 1.); loss += (b.P + b.C + b.D)*(1 - f); b.P, b.C, b.D = b.P*f, b.C*f, b.D*f
     if b.alive:
-        g, s, dth = P_["eco_growth"], P_["eco_stiffness"], P_["eco_death"]
+        g, s, dth = P_["eco_growth"]*growth_mult, P_["eco_stiffness"], P_["eco_death"]
         n = max(1, int(np.ceil(dt_w_yr*g*4)))
         for _ in range(n):
             h = dt_w_yr/n; tot = b.P + b.C + b.D
@@ -35,9 +37,11 @@ def step(bio, climate, chem, LP=None, dt_w_yr=1., disturbance=0.):
             dC = .1*b.C*b.P/(b.P+.5) - dth*b.C + (1e-4*b.P if b.C == 0 else 0)
             dD = .1*dth*(b.P+b.C) - dth*b.D + (1e-4*b.P if b.D == 0 else 0)
             if K <= 0: dP, dC, dD = -b.P, -b.C, -b.D               # no growth without water/chem
+            loss += h*((dth*(b.C + b.D) + .1*b.C*b.P/(b.P+.5)) if K > 0 else tot)   # mortality + grazing inefficiency (C/N/P books)
             b.P, b.C, b.D = max(0., b.P+h*dP), max(0., b.C+h*dC), max(0., b.D+h*dD)
             if K > 0 and b.P < 1e-6: b.P = 1e-6                    # refuge: producers persist while habitat holds
-        if b.total() < 1e-9: b.alive, b.P, b.C, b.D = False, 0., 0., 0.
+        if b.total() < 1e-9: loss += b.total(); b.alive, b.P, b.C, b.D = False, 0., 0., 0.
+    if ledger is not None: ledger["loss"] = ledger.get("loss", 0.) + float(loss)
     free = max(0., K - b.total())
     niche = NicheOffer(float(K), int(b.alive)*3, float(b.P*.5 + free*.1) if b.alive else 0.)
     flux = BioSignFlux(float(.21*b.P/(1+b.P)), float(1e-3*b.D/(1+b.D) + 5e-4*b.C/(1+b.C)), float(b.P/(1+b.P)), 0., biosign.h2o_column(climate))

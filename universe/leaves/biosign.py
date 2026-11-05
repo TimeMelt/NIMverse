@@ -3,6 +3,7 @@ Turns BioSignFlux scalars (o2, ch4, pigments, h2o, tech) into a short list of ab
 rest wavelengths (nm).  Each line: {name, species, rest_nm, kind, strength} where strength = scalar * weight, so a
 line is detectable iff its species scalar * weight clears thresh[species] * weight (legacy scalar parity)."""
 import math
+import numpy as np
 
 # name, species, rest_nm, kind, weight (relative depth within its species)
 LINES = [
@@ -20,6 +21,10 @@ LINES = [
 def h2o_column(climate):
     """Water-vapour proxy: liquid-water fraction x smooth temperature (evaporation) factor, in [0, ~.6]."""
     if climate is None: return 0.
+    st = getattr(climate, "stressors", None) or {}
+    if st.get("lat_T") is not None and st.get("lat_water") is not None:     # band climate: area-mean of per-band evaporation
+        T = np.asarray(st["lat_T"], float); w = np.asarray(st["lat_water"], float)
+        return float(np.mean(.5*w/(1 + np.exp(-(T - 260.)/12.))))
     w = float(getattr(climate, "liquid_water_frac", 0.) or 0.); T = float(getattr(climate, "T_K", 288.) or 0.)
     return float(.5*w*(1/(1 + math.exp(-(T - 260.)/12.))))
 

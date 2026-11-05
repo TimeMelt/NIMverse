@@ -78,7 +78,9 @@ def test_culture_biosphere_coupling():
     assert ctl["tech"] > 0 and hot["culture"]["peak"]["tech_dT"] > 5
     assert hot["climate_history"]["T_max"] > ctl["climate_history"]["T_max"] + 5        # tech-driven warming
     tail = lambda r: np.mean([x[1] for x in r["climate_history"]["tail"]])
-    assert tail(hot) > tail(ctl)
+    # physics15: with the silicate-weathering thermostat a big warming pulse draws CO2 down (rebound), so absolute
+    # tail T can sit below control; the persisting tech forcing in the tail is the invariant.
+    assert hot["culture"]["warm_K"] > ctl["culture"]["warm_K"] + 1
     # collapse: extreme toxicity + draw crash organisms / biomass, culture then decays
     ext = run(tech_pollute=2., tech_warm_K=60., tech_draw=.5)
     assert ext["culture"]["peak"]["tech_kill"] > .1
@@ -142,7 +144,7 @@ def test_stellar_brightening_warms_climate():
     ev, ctl = run(stellar_evolve=1., stellar_age_rate=1e6), run(stellar_evolve=0.)
     T = lambda r: np.array([x[1] for x in r["climate_history"]["series"]])
     Te, Tc = T(ev), T(ctl); q = len(Te)//4
-    assert Te[-q:].mean() - Te[:q].mean() > 10. and abs(Tc[-q:].mean() - Tc[:q].mean()) < 1e-6
+    assert Te[-q:].mean() - Te[:q].mean() > 10. and abs(Tc[-q:].mean() - Tc[:q].mean()) < .5   # physics15: lat EBM + carbon cycle settle slightly (~0.04 K)
     assert ev["host"]["dL_frac"] > .2 and ctl["host"]["dL_frac"] == 0. and ev["climate"]["stressors"]["hz_in_now"] > ctl["climate"]["stressors"]["hz_in_now"]
 
 def test_stellar_post_ms_track():

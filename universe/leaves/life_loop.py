@@ -3,7 +3,7 @@ For each HZ/near-HZ rocky habitat: HostWeather(flares) -> impacts -> world (+his
 -> biosphere -> organisms -> culture (optional; draws producers same step, pollution warming/toxicity fed to the NEXT step's world/bio/organisms) -> BioSignFlux -> radiation observers (light-time delayed)."""
 import copy, numpy as np
 from ..bodies import lum, temp
-from . import stellar, world, chemistry, biosphere, organisms, individuals, culture as culture_mod
+from . import stellar, world, chemistry, biosphere, organisms, individuals, culture as culture_mod, biogeochem
 from .packets import HostWeather, ScoreBus, as_bus
 from .radiation import ObserverCatalog, Observer
 from . import biosign
@@ -29,7 +29,8 @@ class HabitatRun:
     """Stepwise habitat simulation (the body of run_habitat).  step() advances one dt; report() builds the run_habitat dict.
     years=None -> open-ended (continuous mode): ser_every falls back to `ser_every` (default 50*dt)."""
     def __init__(self, h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
-                 culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40, ser_every=None, mind=None):
+                 culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40, ser_every=None, mind=None,
+                 climate_model="lat", orbit=None):
         self.P = P = as_bus(LP); self.hw = copy.deepcopy(hw); self.h = h = copy.deepcopy(h); self.chem = chemistry.init_chem(h); self.gate = chemistry.planted_gate(0.) if plant else None
         self.rng, self.dt, self.years, self.organisms_after, self.disturb_at = rng, dt, years, organisms_after, disturb_at
         self.culture, self.catalog, self.emit_every, self.culture_min_age, self.record, self.model, self.n_founders = culture, catalog, emit_every, culture_min_age, record, model, n_founders
@@ -39,6 +40,9 @@ class HabitatRun:
         self.drng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 11])        # own stream: drift does not perturb the main rng draws
         self.orng = np.random.default_rng([int(abs(h.a)*1e6) % 2**31, 23])        # own stream for organisms: life draws never shift impacts/abiogenesis timing
         self.drift = world.ClimateDrift(P["climate_drift"], self.drng) if P["climate_drift"] > 0 else None
+        self.climate_model = climate_model; self.lat = self.carbon = self.bgc = None
+        if climate_model == "lat":      # physics15: latitudinal EBM + carbon-silicate cycle (started at its weathering equilibrium)
+            self.lat, self.carbon = biogeochem.init_climate(h, self.hw, P, orbit); self.bgc = biogeochem.Biogeochem(self.carbon)
         self.hist = world.ClimateHistory(n=4000); self.cu = culture_mod.Culture(); self.tstress = {}; self.peak = {}; self.n_imp = 0; self.impact_loss = 0.; self.k = 0
 
     @property
@@ -54,19 +58,30 @@ class HabitatRun:
         if self.drift is not None: stress.update(self.drift.step(t, dt, self.drng))          # planetary climate drift (T, water, class, stress)
         stress.update({kk: v for kk, v in imp.items() if kk != "dT"}); stress["dT"] += imp.get("dT", 0.); stress["impact_dT"] = imp.get("dT", 0.)
         if tstress: stress.update(tstress); stress["dT"] += tstress["tech_dT"]       # previous step's tech feedback
-        clim = world.step(h, hw, P, dt, stress); self.hist.push(t, clim)
-        if stress["impact_dT"]:      # impact winter freezes water briefly: the shock is the kill, chronic stress uses pre-impact water
+        if self.lat is not None:
+            # tech GHG enters as CO2, not a K offset: culture's short-lived pollution stock (POLL_TAU) is the anthropogenic CO2
+            # pulse, x2^(greenhouse_K/co2_sens_K) on pCO2 (so the K-scale knob tech_warm_K keeps its meaning, now through the
+            # log-CO2 greenhouse + feedbacks); the long tail of fossil carbon goes to C_inorg in carbon.step.
+            if tstress: stress["dT"] -= tstress.get("tech_greenhouse_K", 0.)
+            self.lat.tech_co2_mult = float(2.**(tstress.get("tech_greenhouse_K", 0.)/P["co2_sens_K"])) if tstress else 1.
+            clim = self.lat.step(h, hw, P, dt, stress, t)
+            cu0 = self.cu; fint = cu0.energy_mix.get("fossil", 0.)*(1 - .5*cu0.mitigation) if (self.culture and cu0.active) else 0.
+            clim.stressors.update(self.carbon.step(self.lat, P, dt, float(cu0.level) if self.culture else 0., fint))
+        else: clim = world.step(h, hw, P, dt, stress)
+        self.hist.push(t, clim)
+        if stress["impact_dT"] and self.lat is None:      # impact winter freezes water briefly: the shock is the kill, chronic stress uses pre-impact water
             clim.stressors["water_chronic"] = world.step(h, hw, P, dt, dict(stress, dT=stress["dT"] - stress["impact_dT"])).liquid_water_frac
         chem = chemistry.step(self.chem, clim, hw, P, dt); cu = self.cu
         if self.culture and (cu.active or cu.pollution > 0): chem = culture_mod.apply_chem(chem, cu, P, dt)   # last step's industry -> organics/redox
         gate = self.gate = chemistry.abiogenesis_roll(chem, clim, P, rng, t, dt, self.gate)
         bio = biosphere.seed(self.bio, gate); m0 = bio.total()
-        bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist)
+        led = {}; bio, niche, flux = biosphere.step(bio, clim, chem, P, dt, dist, growth_mult=self.bgc.growth_mult if self.bgc else 1., ledger=led)
+        B_mid = bio.total()
         if tstress.get("tech_footprint"): niche.resources = float(niche.resources*(1 - min(tstress["tech_footprint"], 1.)))   # last step's draw
         if clim.stressors.get("impacts"): self.n_imp += clim.stressors["impacts"]; self.impact_loss += m0*clim.stressors["impact_kill"]
         coh, pop, pkt = self.coh, self.pop, self.pkt
         if self.model == "individuals":
-            if bio.alive and t >= self.organisms_after and pop is None and bio.P > .05: pop = individuals.found(P, self.orng, self.n_founders, t)
+            if bio.alive and t >= self.organisms_after and pop is None and bio.P > .05: pop = individuals.found(P, self.orng, self.n_founders, t, climate=clim if self.lat is not None else None)
             if pop is not None and len(pop):
                 if self.mind is not None: self.mind.culture = dict(level=float(cu.level), pollution=float(cu.pollution), mitigation=float(cu.mitigation)) if self.culture else None
                 pop, pkt = individuals.step(pop, niche, clim, P, self.orng, dt, t, self.ser_every, mind=self.mind); bio = biosphere.apply_creatures(bio, pkt)
@@ -79,6 +94,9 @@ class HabitatRun:
             cu = culture_mod.step(cu, bio, pkt if coh else None, P, rng, t, dt, self.culture_min_age, mind=self.mind); flux.tech = float(cu.level); biosign.attach(flux)
             bio = culture_mod.apply(bio, cu); tstress = culture_mod.stress(cu)
             tstress["tech_footprint"] = cu.footprint; self.peak = {kk: max(self.peak.get(kk, 0.), v) for kk, v in tstress.items()}
+        if self.bgc is not None:       # pass 5: C/N/P/O2/CH4 books; biosign O2/CH4/H2O from pools (+ band climate)
+            clim.stressors.update(self.bgc.step(m0, bio.total(), led.get("loss", 0.) + max(0., B_mid - bio.total()), self.lat, P, dt))
+            self.bgc.biosign(flux, clim); biosign.attach(flux)
         if self.catalog is not None:
             if k % self.emit_every == 0: self.catalog.emit(t, h.name, flux)
             self.catalog.poll(t)
@@ -120,7 +138,8 @@ class HabitatRun:
         cult = dict(level=float(cu.level), active=bool(cu.active), pollution=float(cu.pollution), warm_K=float(self.tstress.get("tech_dT", 0.)),
                     polities_n=len(cd.get("polities") or []), footprint=float(cu.footprint)) if self.culture else None
         return dict(t_w=float((self.k-1)*self.dt), step=int(self.k), planet=self.h.name, ptype=self.h.ptype,
-                    climate=dict(T_K=float(clim.T_K), water=float(clim.liquid_water_frac), cls=clim.climate_class),
+                    climate=dict(T_K=float(clim.T_K), water=float(clim.liquid_water_frac), cls=clim.climate_class,
+                                 **{k: clim.stressors[k] for k in ("lat_deg", "lat_T", "lat_water", "lat_ice", "pCO2_bar", "ecc", "obliquity_deg") if k in clim.stressors}),
                     biomass=float(self.bio.total()), alive=bool(self.bio.alive),
                     biosign=dict(o2=float(flux.o2), ch4=float(flux.ch4), pigments=float(flux.pigments), tech=float(flux.tech), h2o=float(getattr(flux, "h2o", 0.) or 0.)),
                     tech=float(flux.tech), culture=cult, n_alive=int(n_alive), n_species=int(len(np.unique(pop.species))) if n_alive else 0,
@@ -144,10 +163,12 @@ class HabitatRun:
                     **({"mind": self.mind.summary()} if getattr(self.mind, "active", False) else {}))
 
 def run_habitat(h, hw, LP, rng, years=2000, dt=10., plant=False, organisms_after=0., disturb_at=None,
-                culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40, mind=None):
+                culture=True, catalog=None, emit_every=1, culture_min_age=1000., record=None, model="individuals", n_founders=40, mind=None,
+                climate_model="lat", orbit=None):
     """model="individuals" (default): literal organisms with ids/parents + evolution (leaves.individuals); "cohorts": legacy cohort model.
     Finite wrapper over HabitatRun (same rng order -> identical reports)."""
-    run = HabitatRun(h, hw, LP, rng, years, dt, plant, organisms_after, disturb_at, culture, catalog, emit_every, culture_min_age, record, model, n_founders, mind=mind)
+    run = HabitatRun(h, hw, LP, rng, years, dt, plant, organisms_after, disturb_at, culture, catalog, emit_every, culture_min_age, record, model, n_founders, mind=mind,
+                     climate_model=climate_model, orbit=orbit)
     for _ in range(int(years/dt)): run.step()
     return run.report()
 
@@ -157,13 +178,17 @@ def run_habitat_continuous(h, hw, LP, rng, dt=10., plant=False, culture=True, ma
     yield from run.frames(max_years, emit_every, stop)
 
 def life_loop(S, seed, LP=None, years=2000, dt=10., plant=False, rng=None, culture=True, distance_pc=None, observers=None,
-              emit_every=None, M_override=None, record=None, model="individuals", mind=None):
+              emit_every=None, M_override=None, record=None, model="individuals", mind=None, climate_model="lat", secular=True):
+    """climate_model="lat" (physics15 default): latitudinal EBM + carbon cycle (+ secular orbit drivers if `secular`); "box": v1 0-D."""
     P = as_bus(LP); rng = rng or np.random.default_rng(seed); hw = host_weather(S, distance_pc, M_override, seed=seed)
     cat = ObserverCatalog(observers or [Observer("obs0", hw.distance_pc)])
     ee = emit_every or max(1, int(years/dt)//400)
     habs = habitats_from_system(S, seed, P); rep = []
+    from .orbit_climate import drivers_from_system
+    orbs = drivers_from_system(S, habs, seed) if (secular and climate_model == "lat") else {}
     for h in habs:
-        if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee, record=record, model=model, mind=mind))
+        if candidate(h): rep.append(run_habitat(h, hw, P, rng, years, dt, plant, culture=culture, catalog=cat, emit_every=ee, record=record, model=model, mind=mind,
+                                                climate_model=climate_model, orbit=orbs.get(h.planet_id)))
         else: rep.append(dict(habitat=h.to_dict(), skipped="not rocky near-HZ"))
     cat.poll(years)
     clims = [world.step(h, hw, P) for h in habs]

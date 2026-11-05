@@ -394,3 +394,44 @@ python -m universe.run_life --seed 4 --plant --mind heuristic --mind-learn --min
 python -m universe.run_life --seed 4 --plant --mind circuit --mind-learn --mind-trace out/mind.jsonl
 python -m universe.run_life_live --seed 4 --plant --mind circuit --mind-talk --mind-url http://127.0.0.1:11434/v1 --mind-model llama3.2 --mind-every 100 --mind-batch 8
 ```
+
+## Physics realism passes 1-5 (physics15)
+Default `climate_model="lat"`. Pass `climate_model="box"` to `life_loop`/`run_habitat`/`HabitatRun` to get the legacy 0-D `world.step` back (that also turns off the carbon cycle and the C/N/P books). Step order: host → impacts → drift → LatClimate → carbon → chemistry → abiogenesis → biosphere → individuals → culture → C/N/P books.
+
+1. **Latitudinal EBM, wired into individuals** (`world.LatClimate`, `orbit_climate.insolation`)
+   - Budyko–Sellers-type diffusive energy balance on 24 equal-area sin-latitude bands (`world.N_BANDS`). It has ice-albedo feedback, a deep-ocean heat reservoir, a seasonal amplitude from the orbit, a log-CO₂ greenhouse, and a saturating water-vapour feedback (`WV_SAT`).
+   - Earth analogue: mean 289 K, equator 304 K, pole 263 K.
+   - Exports `lat_T`, `lat_water`, `T_eq_lat`, `T_pole`, `ice_lat_deg` and `season_K` in `ClimateStress.stressors`.
+   - `individuals.found(climate=)` places founders in habitable bands. `individuals.local_stress` uses band T and water at each organism's latitude (asymmetric heat/cold, plus a photoperiod term), and `band_values` gives local productivity.
+2. **Carbon-silicate cycle with tech coupling** (`biogeochem.CarbonCycle`, `init_climate`)
+   - Volcanic outgassing scales as (mass)^½ × volatiles and is suppressed on deep global oceans (Kite 2009). Weathering follows a WHAK-style law (T, runoff, pCO₂^0.3, normalised so Earth = 1 at pre-industrial CO₂).
+   - Each planet starts at its own weathering equilibrium (bisection, cached). Earth comes out near pre-industrial CO₂; seed-4 planet2 at about 3300 ppm.
+   - Time is compressed by `carbon_rate` (20).
+   - Tech coupling: culture's `greenhouse_K` now multiplies pCO₂ by 2^(gK/`co2_sens_K`) instead of adding a K offset, and fossil burning moves carbon from `fossil` into `C_inorg`.
+3. **Heritable body mass** (`individuals`: `logm` trait, `mass_of`, `predation`)
+   - Need scales as M^0.75 (Kleiber). Energy store scales as M, food reach as M^0.75, step length as M^(1/6), reproduction as M^-0.25, and offspring cost as M^0.25. There is a small Bergmann hardiness bonus.
+   - Within a density cell, a larger organism (Δlog m > `PRED_GAP`) eats a smaller one at `pred_rate`.
+   - `logm` is inherited with mutation and is used in species clustering. `mass_sd=0, pred_rate=0` reproduces the legacy RNG streams, because mass uses its own RNG.
+4. **Secular orbit drives climate** (`orbit_climate.SecularOrbit`, `drivers_from_system`)
+   - Eccentricity and perihelion come from first-order Laplace–Lagrange theory on the system's planets. Obliquity varies by ±1.2° with a period of 41 kyr/spin, and precession has a period of 25.8 kyr/spin.
+   - These feed `insolation(e, varpi, obliquity)` in LatClimate. Use `life_loop(secular=False)` to fix the orbit.
+5. **Mass-conserving C/N/P biogeochemistry** (`biogeochem.Biogeochem`; `biosphere.step(growth_mult=, ledger=)`)
+   - Biomass is in C units. Each step, NPP = ΔB + losses, so the books balance exactly. Losses split into 30% detritus and 70% respired. Detritus decays at 1%/yr; the anoxic part ferments (2 CH₂O → CH₄ + CO₂). Detritus is buried at 1e-4/yr. CH₄ oxidises with a lifetime that depends on O₂.
+   - O₂ = photosynthesis − respiration − decay − 2·CH₄ oxidation − a volcanic reductant sink.
+   - N and P are tracked in Redfield units (N .15, P .0094 per C). N is fixed and denitrified; P is supplied by weathering and removed by burial. Together they set a Monod `growth_mult`.
+   - Biosignatures now come from the pools: o2 = .21·O₂/(O₂+`O2_HALF`), ch4 = `CH4_K`·CH₄, and h2o is the area mean of band evaporation. The `BioSignFlux`/life_loop API is unchanged.
+   - Stressors gain `C_bio`, `C_det`, `C_sed`, `CH4_pool`, `O2_pool`, `N_avail`, `P_avail`, `growth_mult`, `C_total` and `C_drift`. `C_drift` stays ~1e-11.
+
+How to check: `python -m pytest universe/leaves/test_physics15.py` (band gradient, CO₂→T, Kleiber burn, e/obliquity insolation, C conservation); `python -m universe.smoke_physics15` (6 kyr) and `--years 60000 --dt 50` for the seed-4 health smoke runs. Use `PYTHONPATH=<repo>:/workspace/NIM`.
+
+**Limits that remain:**
+- No radiative transfer. CO₂ and water vapour are parametrised fits, and clouds are absent.
+- The EBM has no zonal structure, no continents, and no ocean dynamics beyond diffusion.
+- The ice world (seed-4 planet3) runs to the 10 bar CO₂ cap and can thaw enough for late life at around 60 kyr.
+- Desert worlds sit warm (305–307 K).
+- The secular theory is first order (no resonances or chaos). The obliquity cycle is a fixed sinusoid, not a spin-axis precession solution.
+- Carbon-cycle time is compressed ×20, and biogeochemistry time runs on the sim clock, so the O₂ pool on these short runs is still dominated by standing biomass and detritus rather than long-term burial. O₂ and CH₄ are toy scalings calibrated to the old v1 biosign scale, not partial pressures.
+- Nutrient pools are global, not per band.
+- Predation is pairwise within a cell, with no explicit trophic levels in the 3-guild biosphere.
+- Mass is a single trait with no allometric lifespan.
+- The test suite is slower (~10 min for the three main suites).
