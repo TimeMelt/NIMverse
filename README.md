@@ -1,4 +1,4 @@
-# nim-universe
+# NIMverse
 
 Procedural 3D universe generator that uses NIM (https://github.com/TimeMelt/NIM) inceptron meshes and the QrnLOpt optimizer to learn its generation parameters. Creature steering uses CircuitMind, a variational quantum circuit built on the QWRK architecture (https://github.com/TimeMelt/QWRK). It covers galaxies, stars, planets, supernovae, black holes, TDEs and AGN, and includes a three.js viewer.
 
