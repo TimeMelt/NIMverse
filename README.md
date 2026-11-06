@@ -1,8 +1,9 @@
 # nim-universe
 
-Procedural 3D universe generator that uses NIM (https://github.com/TimeMelt/NIM) inceptron meshes and the QrnLOpt optimizer to learn its generation parameters. It covers galaxies, stars, planets, supernovae, black holes, TDEs and AGN, and includes a three.js viewer.
+Procedural 3D universe generator that uses NIM (https://github.com/TimeMelt/NIM) inceptron meshes and the QrnLOpt optimizer to learn its generation parameters. Creature steering uses CircuitMind, a variational quantum circuit built on the QWRK architecture (https://github.com/TimeMelt/QWRK). It covers galaxies, stars, planets, supernovae, black holes, TDEs and AGN, and includes a three.js viewer.
 
 - `universe/`: the code. It's run as the `universe` package next to a NIM checkout, e.g. `python -m universe.learn_alt2`.
+- CircuitMind (`--mind circuit`) uses the QWRK (https://github.com/TimeMelt/QWRK) wire/feature layout: AngleEmbedding prep, layered RX/RY/RZ body, and per-head PauliX readout. Details are under Local mind below.
 - `results/`: the learned parameters, training logs and convergence plots.
 
 Large rendered outputs (videos, HTML viewers, frames, .npz) are not included.
