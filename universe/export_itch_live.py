@@ -50,6 +50,9 @@ def build(out):
         z.write(WEB/'bridge.py','live_bridge.py')
     for p in WEB.iterdir():
         if p.suffix in ['.js','.html','.css','.json']:shutil.copy2(p,out/p.name)
+    for name in ['three.min.js','OrbitControls.js']:
+        shutil.copy2(ROOT/'universe/vendor'/name,out/name)
+    shutil.copy2(ROOT/'universe/viewer_src/shaders.js',out/'shaders.js')
     shutil.copy2(ROOT/'LICENSE',out/'LICENSE.txt')
     archive=out.parent/'nimverse_live_universe.zip'
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:

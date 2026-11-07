@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {Universe} from './universe.js';import {makeSystem,position,lifeSpec} from './system.js';
+test('systems keyed by host, exploration order independent',()=>{let u=new Universe(4),stars=u.bodies.filter(b=>b.kind===1);for(let i of [2,30,12]){const a=makeSystem(4,stars[i]),b=makeSystem(4,stars[i]);assert.deepEqual(a,b);assert.equal(a.star.mass,stars[i].smass);assert.equal(a.star.Z,stars[i].Z);assert.ok(a.planets.length>=3);}});
+test('Kepler periods, HZ and unit-consistent habitats',()=>{let st={id:'sun',smass:1,age:4600,Z:.0142};let s=makeSystem(123,st);for(const p of s.planets){const a=position(p,s.star.mass,0),b=position(p,s.star.mass,p.a**1.5);assert.ok(Math.hypot(...a.map((v,i)=>v-b[i]))<1e-8);const h=lifeSpec(s,p).habitat;assert.ok(Math.abs(h.irradiance-1/h.a**2)<1e-12);assert.equal(h.in_hz,h.a>=.95&&h.a<=1.67);}});
+test('different stars produce different systems',()=>{let u=new Universe(22),st=u.bodies.filter(b=>b.kind===1);assert.notDeepEqual(makeSystem(22,st[1]).planets,makeSystem(22,st[2]).planets);});
