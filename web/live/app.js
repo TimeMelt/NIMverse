@@ -1,8 +1,13 @@
 import {Universe,hash,TAU} from './universe.js';
 import {makeSystem,position,lifeSpec,look} from './system.js';
+import {LifeWorker} from './client.js';
+import {structureDrive,physicsDrive} from './quantum.js';
 const $=id=>document.getElementById(id),V3=THREE.Vector3;
 const preset=await(await fetch('preset.json')).json();$('preset').textContent='NIM · offline-trained preset';
 let seed=4,u,mode='galaxy',sys=null,planet=null,paused=false,speed=1,year=0,photo=false,quantum=true;
+const life=new LifeWorker();let currentSpec=null,cache=new Map(),busy=false,epoch=0,workerPerf=null,driveValues=[0,0,0,0,0],lastTick=null,lastBackground=0,lifeSeq=0,lastLifeWall=0;
+life.ready.then(p=>{workerPerf=p;$('status').textContent=`Offline Python ready · REBOUND ${p.rebound} · ${(p.loadMs/1000).toFixed(1)} s load`;}).catch(showError);
+function showError(e){$('status').textContent='Simulation error: '+String(e);console.error(e);}
 let frameTimes=[],lastFrame=performance.now(),lastG=0,fps=0,steps=0;
 const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.setSize(innerWidth,innerHeight);$('viewport').appendChild(renderer.domElement);
 const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,.001,10000),controls=new THREE.OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.dampingFactor=.1;
@@ -27,8 +32,8 @@ function buildGalaxy(){clear(galGroup);clear(fxGroup);const p=new Float32Array(u
  // Haze uses the same live particle positions, no duplicate simulation/history.
  const hg=new THREE.BufferGeometry();hg.setAttribute('position',gGeo.getAttribute('position'));hg.setAttribute('color',gGeo.getAttribute('color'));hg.setAttribute('size',new THREE.BufferAttribute(new Float32Array(u.bodies.length).fill(1.6),1));galGroup.add(new THREE.Points(hg,new THREE.ShaderMaterial({uniforms:{uScale:{value:innerHeight},uAlpha:{value:.055}},vertexShader:VS_PTS,fragmentShader:FS_PTS,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false})));
 }
-function seedUniverse(s){seed=s>>>0;u=new Universe(seed,preset.params,preset.events);sys=null;planet=null;year=0;steps=0;buildGalaxy();showGalaxy();}
-function setMode(m){mode=m;galGroup.visible=m==='galaxy';sysGroup.visible=m==='system';worldGroup.visible=m==='planet';fxGroup.visible=m==='galaxy';$('surface').hidden=m!=='surface';$('intro').hidden=m!=='galaxy';$('land').hidden=m!=='planet'||planet.look.type.includes('giant');$('photo').hidden=m!=='surface';renderer.domElement.style.visibility=m==='surface'?'hidden':'visible';$('system').disabled=!sys;$('planet').disabled=!planet;}
+function seedUniverse(s){seed=s>>>0;const z=structureDrive(seed),P={...preset.params};if(quantum){P.gal_radius_mult*=1+.04*z[0];P.disk_frac*=1+.04*z[1];}u=new Universe(seed,P,preset.events);epoch++;currentSpec=null;cache.clear();lastTick=null;life.call('clear').catch(showError);sys=null;planet=null;year=0;steps=0;buildGalaxy();showGalaxy();}
+function setMode(m){mode=m;$('panel').hidden=m==='surface';if(m!=='surface'&&$('surface').hasAttribute('src'))$('surface').removeAttribute('src');galGroup.visible=m==='galaxy';sysGroup.visible=m==='system';worldGroup.visible=m==='planet';fxGroup.visible=m==='galaxy';$('surface').hidden=m!=='surface';$('intro').hidden=m!=='galaxy';$('land').hidden=m!=='planet'||planet.look.type.includes('giant');$('photo').hidden=m!=='surface';renderer.domElement.style.visibility=m==='surface'?'hidden':'visible';$('system').disabled=!sys;$('planet').disabled=!planet;}
 function showGalaxy(){setMode('galaxy');camera.up.set(0,1,0);camera.position.set(0,55,100);controls.target.set(0,0,0);controls.minDistance=.1;controls.maxDistance=600;$('panelTitle').textContent='OBSERVATORY';updatePanel();}
 function openSystem(star){selectedStar=star;sys=makeSystem(seed,star,preset.params);year=0;planet=null;clear(sysGroup);systemBodies=[];
  const starMesh=makeBody({type:'star'},.17);sysGroup.add(starMesh);
@@ -61,16 +66,41 @@ $('galaxy').onclick=showGalaxy;$('system').onclick=showSystem;$('planet').onclic
 $('explore').onclick=()=>{const stars=u.bodies.filter(b=>b.kind===1&&b.smass>.65&&b.smass<1.4);openSystem(stars[hash(seed,'explore')%stars.length]||u.bodies.find(b=>b.kind===1));};
 $('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'▶ Resume':'Ⅱ Pause';};$('speed').onchange=()=>speed=+$('speed').value;$('quantum').onchange=()=>quantum=$('quantum').checked;
 $('generate').onclick=()=>seedUniverse(Number($('seed').value));$('reset').onclick=()=>seedUniverse(seed);$('full').onclick=()=>{if(document.fullscreenElement)document.exitFullscreen();else document.documentElement.requestFullscreen().catch(e=>$('status').textContent='Fullscreen unavailable: '+e.message);};
-$('land').onclick=()=>{$('status').textContent='Live surface adapter is initializing…';};$('legacy').onclick=()=>{$('explore').click();};
+$('land').onclick=()=>enterWorld(lifeSpec(sys,planet));$('legacy').onclick=legacyWorld;
+$('photo').onclick=()=>{photo=!photo;$('photo').textContent='Photoreal: '+(photo?'on':'off');surfaceSend({nim:'photo',photo});};
 addEventListener('resize',()=>{renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();gPoints.material.uniforms.uScale.value=innerHeight;});
-window.NIM={get universe(){return u},get system(){return sys},get planet(){return planet},get mode(){return mode},openSystem,openPlanet,showGalaxy,showSystem,focusEvent,lifeSpec,stats:()=>({fps,frames:frameTimes.length,gravitySteps:steps})};
+function surfaceSend(d){if(mode==='surface'&&$('surface').contentWindow)$('surface').contentWindow.postMessage(d,'*');}
+function sendInfo(){if(!currentSpec)return;const h=currentSpec.habitat;surfaceSend({nim:'info',info:{seed:currentSpec.seed,planet:h.name,ptype:h.ptype,look:currentSpec.look,focus:h.name,dt:20,multi:false,title:`${h.name} · live 24-band climate + evolving life`}});if(lastTick)surfaceSend({nim:'tick',tick:lastTick});}
+async function enterWorld(spec){
+ const ticket=++epoch;try{
+  if(spec.habitat.m>12*3e-6)return;
+  $('status').textContent='Initializing real 24-band climate and living world…';
+  await life.ready;if(ticket!==epoch)return;
+  spec.circuit=true;if(!spec.id.startsWith('legacy'))spec.solvers={foodweb:'species-div'};
+  if(!cache.has(spec.id)){await life.call('create',{spec});if(ticket!==epoch)return;while(cache.size>=4)cache.delete(cache.keys().next().value);cache.set(spec.id,{spec,tick:null});}
+  currentSpec=spec;lastTick=cache.get(spec.id).tick;lifeSeq=lastTick?.seq||0;
+  setMode('surface');$('surface').src='surface.html';$('panel').hidden=true;
+  if(!lastTick){busy=true;const tk=await life.call('tick',{key:spec.id,n:5,time:0,quantum});if(ticket===epoch)acceptTick(tk,spec);busy=false;}
+ }catch(e){busy=false;showError(e);}
+}
+function acceptTick(tk,sp){tk.seq=++lifeSeq;tk.paused=paused;tk.mode='live';tk.realtime_s=.125/speed;tk.hist_from=tk.seq;tk.hist_to=tk.seq;lastTick=tk;driveValues=tk.quantum_drive||[0,0,0,0,0];if(cache.has(sp.id))cache.get(sp.id).tick=tk;surfaceSend({nim:'tick',tick:tk});$('status').textContent=`${sp.habitat.name}: year ${tk.t_w.toFixed(0)} · ${tk.n_alive} individuals · ${tk.n_species} species · ${tk.tickMs.toFixed(0)} ms/tick · ${(tk.memoryBytes/1048576).toFixed(0)} MB WASM · drive Δflux ${(driveValues[0]).toFixed(3)}%`;}
+async function legacyWorld(){try{const spec=await(await fetch('seed4.json')).json();const st={id:'legacy seed 4',smass:spec.star.mass,age:spec.star.age*1000,Z:spec.star.Z||.0142};openSystem(st);planet={id:spec.id,name:spec.habitat.name,index:2,a:spec.habitat.a,e:spec.habitat.e,m:spec.habitat.m,moons:[],look:spec.look};$('planet').textContent=planet.name;await enterWorld(spec);}catch(e){showError(e);}}
+addEventListener('message',e=>{if(e.source!==$('surface').contentWindow)return;const d=e.data;if(d.nim==='surface-ready'){sendInfo();return;}if(d.nim==='control'){const a=d.body.action;if(a==='pause'||a==='resume'||a==='toggle'){if((a==='pause'&&!paused)||(a==='resume'&&paused)||a==='toggle')$('pause').click();if(lastTick){lastTick.paused=paused;surfaceSend({nim:'tick',tick:lastTick});}}if(a==='set_speed'){speed=d.body.speed===0?4:d.body.speed;$('speed').value=String(speed);}}});
+setInterval(async()=>{
+ if(busy||paused||!currentSpec||performance.now()-lastLifeWall<125/speed)return;lastLifeWall=performance.now();busy=true;const sp=currentSpec,ticket=epoch;
+ try{const tk=await life.call('tick',{key:sp.id,n:1,time:(lastTick?.t_w||0)+20,quantum});if(ticket===epoch)acceptTick(tk,sp);
+  // Coarse wall-clock LOD: one exact tick per five seconds on cached inactive worlds.
+  if(performance.now()-lastBackground>5000){lastBackground=performance.now();const bg=[...cache.keys()].filter(k=>k!==sp.id);if(bg.length){const key=bg[Math.floor(lastBackground/5000)%bg.length],rec=cache.get(key);if(rec){const t=await life.call('tick',{key,n:1,time:(rec.tick?.t_w||0)+20,quantum});if(cache.has(key))rec.tick=t;}}}
+ }catch(e){if(ticket===epoch)showError(e);}finally{busy=false;}
+},25);
+window.NIM={get universe(){return u},get system(){return sys},get planet(){return planet},get mode(){return mode},get lastTick(){return lastTick},get workerPerf(){return workerPerf},get cache(){return [...cache.keys()]},rpc:(op,args)=>life.call(op,args),enterWorld,legacyWorld,openSystem,openPlanet,showGalaxy,showSystem,focusEvent,lifeSpec,stats:()=>({fps,frames:frameTimes.length,gravitySteps:steps})};
 seedUniverse(4);
 function animate(now){requestAnimationFrame(animate);const dt=Math.min(.06,(now-lastFrame)/1000);lastFrame=now;frameTimes.push(dt);if(frameTimes.length>120)frameTimes.shift();
- if(!paused){year+=dt*.12*speed;if(now-lastG>80/speed){u.step(.003,.35);steps++;lastG=now;const pos=gGeo.getAttribute('position'),col=gGeo.getAttribute('color');for(let i=0;i<u.bodies.length;i++){let b=u.bodies[i];pos.setXYZ(i,...b.p);if(b.kind!==1&&b.kind!==0&&b.kind!==4)col.setXYZ(i,...(b.kind===9?[0,0,0]:b.kind===5?[.2,.1,.3]:[.5,.8,1]));}pos.needsUpdate=true;col.needsUpdate=true;updatePanel();}}
+ if(!paused){year+=dt*.12*speed;if(now-lastG>80/speed){u.step(.003,.35,quantum?(id,t)=>physicsDrive(seed,id,t):null);steps++;lastG=now;const pos=gGeo.getAttribute('position'),col=gGeo.getAttribute('color');for(let i=0;i<u.bodies.length;i++){let b=u.bodies[i];pos.setXYZ(i,...b.p);if(b.kind!==1&&b.kind!==0&&b.kind!==4)col.setXYZ(i,...(b.kind===9?[0,0,0]:b.kind===5?[.2,.1,.3]:[.5,.8,1]));}pos.needsUpdate=true;col.needsUpdate=true;updatePanel();}}
  for(const g of systemBodies)g.position.set(...position(g.userData.planet,sys.star.mass,year).map(v=>v/sys.scale));
  for(const g of sysGroup.children)if(g.userData.moon){const h=g.userData.host,m=g.userData.moon,ph=m.phase+year*TAU*Math.sqrt(h.userData.planet.m/m.a**3);g.position.copy(h.position).add(new V3(Math.cos(ph),0,Math.sin(ph)).multiplyScalar(Math.max(.08,m.a/sys.scale*3)));}
  if(worldMesh)worldMesh.rotation.y+=dt*.04;
- drawEvents(now);controls.update();renderer.render(scene,camera);
- if(Math.round(now)%500<20){fps=1/(frameTimes.reduce((a,b)=>a+b,0)/frameTimes.length);$('stats').textContent=`${fps.toFixed(0)} FPS · ${mode.toUpperCase()} · ${quantum?'QUANTUM DRIVE ON':'CLASSICAL ONLY'}`;}
+ drawEvents(now);controls.update();if(mode!=='surface')renderer.render(scene,camera);
+ if(Math.round(now)%500<20){fps=1/(frameTimes.reduce((a,b)=>a+b,0)/frameTimes.length);$('stats').textContent=`${fps.toFixed(0)} FPS · ${mode.toUpperCase()} · ${quantum?'QUANTUM DRIVE ON':'QUANTUM DRIVE OFF'}`;}
 }
 requestAnimationFrame(animate);$('status').textContent='Live generation · entirely local · no backend';

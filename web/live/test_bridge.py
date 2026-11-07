@@ -13,3 +13,17 @@ def test_real_leaf_tick_is_deterministic():
     assert a.tick(4)==b.tick(4)
     assert len(a.lat.T)==24
     assert np.isfinite(a.clim.T_K)
+
+def test_drive_changes_classical_forcing_and_turns_off():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('live_bridge', Path(__file__).with_name('bridge.py'))
+    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    s=json.loads(Path('.build-live/seed4.json').read_text())
+    a=m.make_run(s); b=m.make_run(s)
+    m.apply_drive(a,[1.,1.,0,0,1.]);m.apply_drive(b,[0.]*5)
+    a.step();b.step()
+    assert a.hw.L_now>b.hw.L_now
+    assert a.P['flare_rate_mult']>b.P['flare_rate_mult']
+    assert a.lat.orbit.at(0)['e']>b.lat.orbit.at(0)['e']
+    m.apply_drive(a,[0.]*5)
+    assert a.P['flare_rate_mult']==b.P['flare_rate_mult']
