@@ -24,7 +24,7 @@ def make_run(spec, mind=None):
 runs={}
 def create(spec):
     key=spec['id']; runs.pop(key,None)
-    # An LRU of four live worlds. Evicted worlds are regenerated on re-entry.
+    # A FIFO cache of four live worlds. Evicted worlds are regenerated on re-entry.
     while len(runs)>=4: runs.pop(next(iter(runs)))
     mind=BrowserMind(key,spec['seed']) if spec.get('circuit') and circuit_eval else None
     runs[key]=make_run(spec,mind=mind)

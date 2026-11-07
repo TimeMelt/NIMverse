@@ -578,6 +578,52 @@ python -m universe.smoke_physics15 --years 3000 --climate-model gcm2d --rt --rt-
 python -m universe.smoke_physics15 --years 3000 --foodweb species-div
 ```
 
+## Live browser universe
+
+The browser build is **live simulation, not the earlier recorded replay**. It generates a finite procedural universe from any 32-bit seed: three galaxies, 768 star tracers, and a deterministic system around every explorable star. Navigate galaxy → clicked star → generated planet → live surface / creature. All execution stays in the browser, including Python in an offline Web Worker.
+
+Build locally (first build downloads the pinned runtime; later builds use the gitignored cache):
+
+```bash
+PYTHONPATH=.:/workspace/NIM /workspace/nimenv/bin/python -m universe.export_itch_live
+```
+
+Outputs: `/workspace/itch/live_universe/index.html` and `/workspace/itch/nimverse_live_universe.zip`, with `index.html` at zip root. Upload as an itch.io **HTML** project, mark the zip playable in-browser, enable fullscreen, and use 1280×720 or a larger responsive viewport. The build does not publish anything. For local testing, serve the directory with any static HTTP server; `file://` is not supported by Web Workers. No backend, CDN requests, special cross-origin-isolation headers, or external runtime downloads are needed by the player. Core/NumPy/SciPy/REBOUND wheels and pure-Python sources are bundled in a few dozen files.
+
+Controls: seed / Generate / Reset; drag to orbit, scroll to zoom; click stars or Explore, select a world, Enter living surface; 1/2/3 switch orbit/surface/creature views; P or the photoreal button toggles creature materials. Pause and speed control local simulation. The known seed-4 ocean habitat is also available directly. Adaptive resolution and a 4–8 creature visual LOD lower cost on slow GPUs without reducing the simulated population. Distant galaxy gravity runs at a coarser wall-clock cadence while exploring a local world.
+
+### What is exact, and what is simplified?
+
+| Component | Browser implementation |
+| --- | --- |
+| Life / climate / chemistry | Actual Python `HabitatRun` and leaf modules: 24 latitude bands, carbon-silicate and C/N/P pools, orbit/insolation geometry, individuals with allometric metabolism, births/deaths/inheritance, SciPy species clustering and culture. Generated worlds additionally run the species-div foodweb. |
+| Creature policy | Exact 5-wire QWRK statevector gate algebra: 11 projected features, XY embedding, 2 RX/RY/RZ layers, CNOT rings, 5 PauliX heads. Seeded fixed weights; **no online REINFORCE training**, exploration-noise learning, PennyLane, torch, JAX, or numba runtime dependency. 16 individuals are queried per 40 world years; other individuals retain the original classical behavior. |
+| NIM | Offline-trained generation preset from `learned_params_v3.json` / `learned_events_v4.json`, explicitly labelled in UI, plus a live 16-wire CPU statevector port of the original free-think structure ansatz. Mesh training remains offline. |
+| Galaxy dynamics | JS port of the `sim2` morphology / IMF recipes with bounded, stepwise Barnes–Hut gravity and leapfrog. Stable per-ID RNG streams, not NumPy bit-for-bit generation. Galaxy units are kpc, 10⁸ solar masses, G=1; star labels have separate physical solar masses. |
+| Systems | New host-mass/age/metallicity-linked procedural systems: toy main-sequence age/opacity luminosity correction, metal-dependent disk abundance/masses, and age-dependent close-in eccentricity damping; analytic Kepler orbits and Hill-scaled moons. Real full-system secular drivers feed the climate. Rendered distances normalize AU by √L; body radii and moon separations are exaggerated. REBOUND WASM is bundled and smoke-tested, but does **not** integrate the displayed moons. |
+| Events / strong field | Streaming lifetime deaths, WD/NS/BH remnants, SN kicks, GRBs, radius-gated TDE/capture, SMBH mergers and phenomenological AGN. Schwarzschild/tidal-radius scalars, not numerical relativity, LALSuite waveforms or full hydrodynamics. Ejecta/radiation have an explicit unresolved mass ledger. |
+| Scope / LOD | Four visited worlds cached in memory. Active world owns an independent worker clock (~8 ticks/s at 1×), with one unacknowledged display snapshot maximum; slow rendering drops snapshots rather than slowing physics. Inactive cached worlds take one exact tick in a round-robin pass every five seconds. This is reduced **wall-clock cadence**, not synchronized physical evolution on every world. Evicted worlds regenerate; no disk save/load yet. Full populations evolve, with a stable subset of up to 8 rendered (adaptive to 4 on slow devices). |
+
+The galaxy/event, system-orbit and local-world clocks are intentionally different accelerated clocks. A host snapshot supplies a local world; distant galaxy supernovae do not currently sterilize cached habitats. The browser does not run MESA, ExoPlaSim, full radiative transfer, full general relativity, or every creature everywhere simultaneously. Life on near-HZ rocky worlds is **planted** for exploration, not proof of spontaneous abiogenesis. The age/metallicity/close-in-tide prescriptions and planetary accretion distribution are exploratory, not observationally calibrated formation or stellar-evolution models.
+
+### Quantum-driven physics layer
+
+“Quantum drive” means **classically simulated quantum circuits feeding bounded parameters into classical equations**, not quantum hardware or a validated quantum theory of gravity. It now has effects beyond creature steering:
+
+- NIM 16-wire structure readout: initial galaxy radius and disk-mass fraction, ±4%.
+- Live per-world QWRK readouts: stellar bolometric flux ±1%, UV ±5%, flare-rate multiplier ±20%; those values actually enter the Python climate / chemistry / stellar forcing.
+- Secular eccentricity perturbation ±0.002 (clamped to 0…0.9), changing the native insolation solver.
+- Event QWRK readouts: supernova kick amplitude ±15%; GRB and AGN duty probabilities ±20% (probabilities remain bounded).
+- Creature QWRK actions change movement, foraging, mating and rest; chemistry and ecology respond through the ordinary coupled solvers.
+
+The switch changes **future physics forcing**; regenerate with it off to omit structural modulation. Creature circuit steering remains enabled independently. Open-system forcing can exchange energy; conservation tests therefore isolate closed, drive/event-free gravity and separately check the ejecta/radiation mass ledger. Turning the drive off does not undo past evolution.
+
+### Verification and distribution notes
+
+`web/live/verify_browser.py` exercises a static, nested sandboxed iframe, actual star clicking, multiple worlds, photoreal mode, pause, quantum toggle, fullscreen, resets, request audit and native-vs-worker short-run parity. `web/live/make_circuit_fixtures.py` rebuilds PennyLane reference fixtures. Run the JS tests with `node --test web/live/test_*.js`; the native adapter tests are `web/live/test_bridge.py`. See `docs/live-browser-verification.md` for measured results and limits.
+
+NIMverse source remains MIT. The runtime is a **mixed-license distribution**, not all MIT: notably REBOUND is GPL v3 or later and Pyodide is MPL 2.0. The package preserves dependency notices, includes REBOUND corresponding upstream source, and ships `THIRD_PARTY.txt`. Those dependency licenses still apply when redistributing the bundle.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
@@ -639,3 +685,5 @@ tests a strict sandboxed iframe, pause/scrub/loop/resize, captures orbit, surfac
 creature and photoreal screenshots, logs console errors and requests to
 `demo_shots/verification.json`, and stops the server even on failure.
 Generated HTML, recordings, screenshots and zip files belong outside the repo.
+
+Live-browser validation: ~7.45 detailed ticks/s; software WebGL ~11–28 FPS (30–60 FPS target not met). Hardware GPU, Safari/mobile and total tab memory unverified. See [verification](docs/live-browser-verification.md).

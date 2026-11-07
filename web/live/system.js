@@ -6,13 +6,13 @@ export function look(seed,id,me,a,L,forced){const r=new RNG(seed,`${id}/look`),t
  return {...d,sea:({terran:.45+.2*u(),ocean:.7+.15*u(),desert:.1*u(),ice:.3+.2*u(),lava:.35+.2*u()})[type],rough:.45+.2*u(),cont_scale:1.2+u()*1.6,mountains:.4+u()*.8,moisture:u()-.5,cap:({ice:.2,lava:1.5,desert:1.2})[type]||.72+.15*u(),clouds:({terran:.6,ocean:.75,desert:.05,ice:.15,lava:.2})[type],colors:PAL[type],atm:({terran:[.35,.6,1],ocean:[.3,.55,1],desert:[.95,.7,.45],ice:[.7,.85,1],lava:[1,.4,.15]})[type],radius_rel:Math.max(.6,Math.min(2.2,me**.27))};
 }
 export function makeSystem(seed,host,P=DEFAULTS){
- P={...DEFAULTS,...P};const id=`${seed}/${host.id}`,r=new RNG(seed,`${host.id}/system`),mass=host.smass,L=lum(mass),scale=Math.sqrt(L);
+ P={...DEFAULTS,...P};const id=`${seed}/${host.id}`,r=new RNG(seed,`${host.id}/system`),mass=host.smass,Zratio=Math.max(.05,Math.min(3,host.Z/.0142)),ageGyr=host.age/1000,msGyr=10*mass**-2.5,ageFrac=Math.max(0,Math.min(.99,ageGyr/msGyr)),L=lum(mass)*(1+.4*(ageFrac-.46))*Zratio**-.08,scale=Math.sqrt(L);
  const star={id:host.id,mass,luminosity:L,temperature:5800*Math.max(.08,mass)**.55,age:host.age/1000,Z:host.Z};
- const n=Math.max(3,Math.min(9,Math.round(P.planets_mean+r.normal()))),planets=[];let a=r.uniform(.27,.37)*scale;
+ const n=Math.max(3,Math.min(9,Math.round(P.planets_mean+.6*Math.log10(Zratio)+r.normal()))),planets=[];let a=r.uniform(.27,.37)*scale;
  for(let i=0;i<n;i++){
   const pid=`${id}/planet/${i}`,q=new RNG(seed,pid);a*=q.uniform(1.45,1.8)*P.spacing_mult;
   // Explorer preset samples inner rocky worlds, exterior giants; not an observed exoplanet distribution.
-  const me=i<3?10**q.uniform(-.45,.8):10**q.uniform(-.2,2.4),e=q.uniform(0,.09),ptype=classify(me,a,L,q.random()),d=look(seed,pid,me,a,L,ptype);
+  const me=(i<3?10**q.uniform(-.45,.8):10**q.uniform(-.2,2.4))*Math.sqrt(Zratio),tideGyr=Math.max(.01,10*(a/.1)**6/mass**1.5),e=q.uniform(0,.09)*Math.exp(-ageGyr/tideGyr),ptype=classify(me,a,L,q.random()),d=look(seed,pid,me,a,L,ptype);
   const p={id:pid,index:i,name:`World ${i+1}`,a,e,m:me*3e-6,phase:q.uniform(0,TAU),inc:q.normal()*.025,look:d,moons:[]};
   if(q.random()<.6){const hill=a*(p.m/(3*mass))**(1/3),nm=1+Math.floor(q.random()*3);for(let j=0;j<nm;j++)p.moons.push({a:hill*q.uniform(.15,.4)*P.moon_dist_mult,m:p.m*.001,phase:q.uniform(0,TAU)});}
   planets.push(p);

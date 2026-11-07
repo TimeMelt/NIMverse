@@ -27,3 +27,12 @@ def test_drive_changes_classical_forcing_and_turns_off():
     assert a.lat.orbit.at(0)['e']>b.lat.orbit.at(0)['e']
     m.apply_drive(a,[0.]*5)
     assert a.P['flare_rate_mult']==b.P['flare_rate_mult']
+
+def test_world_cache_is_bounded_with_real_runs():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('live_bridge',Path(__file__).with_name('bridge.py'))
+    m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+    s=json.loads(Path('.build-live/seed4.json').read_text())
+    for i in range(6):m.create(dict(s,id=f'world-{i}',seed=i))
+    assert list(m.runs)==['world-2','world-3','world-4','world-5']
+    assert json.loads(m.advance('world-5'))['step']==1

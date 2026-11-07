@@ -1,0 +1,26 @@
+NIMverse application source: MIT, Copyright (c) 2026 TimeMelt. See LICENSE.txt.
+
+This is a mixed-license aggregate; the NIMverse MIT license does NOT relicense
+third-party runtimes. In particular, REBOUND is GPL v3 or later, not MIT.
+
+Bundled unchanged binaries/packages:
+- Pyodide 314.0.7: Mozilla Public License 2.0. Source and build instructions:
+  https://github.com/pyodide/pyodide/tree/314.0.7
+  https://pyodide.org/en/stable/development/building-from-sources.html
+  MPL text: third_party/MPL-2.0.txt.
+- CPython 3.14.2: Python Software Foundation license and included notices.
+  Source: https://www.python.org/downloads/release/python-3142/
+  Exact 3.14.2 license text: third_party/CPYTHON-LICENSE.txt
+  License reference: https://docs.python.org/3.14/license.html
+- NumPy 2.4.6 / SciPy 1.18.0: BSD and bundled-library notices inside their
+  wheel archives. Main license texts also extracted to third_party/.
+- REBOUND 4.4.7: GPL v3 or later. Full license in the wheel and third_party/.
+  Corresponding upstream source: third_party/rebound-4.4.7-source.tar.gz
+  Build uses the Pyodide 314.0.7 package recipe / Emscripten 5.0.3 ABI 2026_0.
+  Pyodide build recipe/source: https://github.com/pyodide/pyodide/tree/314.0.7/packages/rebound
+- Three.js / OrbitControls: MIT, Copyright 2010-2021 Three.js Authors.
+- Shader noise: Ashima Arts / Stefan Gustavson, MIT, as attributed in shaders.js.
+
+No third-party code is fetched at application runtime. The URLs above are
+source/license references, not application dependencies. Dependency-specific
+licenses and source notices remain applicable when redistributing this bundle.
