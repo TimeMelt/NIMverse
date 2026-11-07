@@ -1,0 +1,15 @@
+"""Native half of the worker parity contract (browser runs identical bridge)."""
+import json
+from pathlib import Path
+import numpy as np
+
+def test_real_leaf_tick_is_deterministic():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('live_bridge', Path(__file__).with_name('bridge.py'))
+    m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    s=json.loads(Path('.build-live/seed4.json').read_text())
+    a=m.make_run(s); b=m.make_run(s)
+    for _ in range(5): a.step(); b.step()
+    assert a.tick(4)==b.tick(4)
+    assert len(a.lat.T)==24
+    assert np.isfinite(a.clim.T_K)

@@ -379,7 +379,7 @@ def _substep(pop, niche, climate, P, rng, dt, t, grave_k, mind=None):
         lam = M**-.25*tr[:, REP]*dt*fit*uptake(tr)**UPT_REP*max(0., 1 - n/(1.5*cap)); kids = rng.poisson(lam)   # slow assimilation -> slow brood growth
         cost = .5*need*M**.25; kids = np.minimum(kids, np.floor(np.maximum(pop.energy, 0)/cost).astype(int)); births = int(kids.sum())
         if births:
-            par = np.repeat(np.arange(n), kids); pop.energy = pop.energy - kids*cost
+            par = np.repeat(np.arange(n), kids.astype(np.intp)); pop.energy = pop.energy - kids*cost
             base = tr[par].copy(); par2 = -np.ones(births, int); g = pop.gen[par].copy()
             sex = np.flatnonzero(rng.random(births) < P["sex_rate"]) if n > 1 else np.zeros(0, int)
             if len(sex):                                                   # mate: best of 8 random candidates (same species, nearby)

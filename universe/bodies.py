@@ -1,12 +1,13 @@
 """Procedural per-body detail (deterministic from universe seed + body id, randomness from the NIM quantum RNG).
 Planet types from mass and distance relative to the habitable zone; stars from temperature; moons get craters."""
 import numpy as np
-from .nim_rng import NIMRandom
 
 EARTH = 3.0e-6   # Msun
 TYPES = ["terran", "desert", "ocean", "ice", "lava", "gas giant", "ice giant"]
 
 def body_rng(seed, bid, rng="nim"):
+    if rng == "nim":
+        from .nim_rng import NIMRandom
     s = (int(seed)*1000003 + int(bid)*7919 + 12345) % (2**31)
     return NIMRandom(s, n_wires=6, shots=512) if rng == "nim" else np.random.default_rng(s)
 

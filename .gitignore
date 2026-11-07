@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 *.npz
 *.mp4
+
+# Reproducible browser runtime/download cache
+.build-live/
