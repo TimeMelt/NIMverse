@@ -577,3 +577,7 @@ python -m universe.smoke_physics15 --years 3000 --orbit-solver nbody --orbit-tid
 python -m universe.smoke_physics15 --years 3000 --climate-model gcm2d --rt --rt-buffer auto
 python -m universe.smoke_physics15 --years 3000 --foodweb species-div
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
