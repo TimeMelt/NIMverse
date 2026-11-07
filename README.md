@@ -581,3 +581,61 @@ python -m universe.smoke_physics15 --years 3000 --foodweb species-div
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## Browser demo
+
+Export an **offline HTML5 replay** for itch.io's in-browser player using the same
+Three.js planet shaders, life-live animation and creature meshes as the local viewer:
+
+```bash
+# On this box, use the existing simulation environment (NumPy, Numba, PennyLane).
+PYTHONPATH=.:/workspace/NIM /workspace/nimenv/bin/python -m universe.export_itch_html \
+  --seed 4 --warmup 2000 --frames 240 --dt 20 --max-show 32 \
+  --mind circuit --interval 0.2 --out /workspace/itch/html_demo
+```
+
+This runs the actual planted seed-4 sim, warms it up, records 240 ticks of the
+planet2 ocean world, and writes `html_demo/index.html` plus
+`/workspace/itch/nimverse_html_demo.zip` (`index.html` at the zip root).
+The default recording evaluates the QWRK-structured circuit mind in Python
+(5 wires, 2 layers, 8 organisms per query every 100 world-years; inference only).
+Export fails if circuit queries fail or no creatures were recorded.
+`--mind none` is available for a faster, non-circuit recording. Other machines
+should replace the interpreter and NIM paths with their local environment paths.
+
+Upload the zip as an HTML project and select **played in the browser**. Recommended
+embed: **1280 × 720**, with fullscreen enabled. All runtime code and recorded data
+are embedded; no CDN, localhost requests, downloads or Python backend are needed.
+The other two zip entries are a provenance manifest and MIT license notices.
+
+Controls: **1 Orbit · 2 Surface · 3 Next creature · P Photoreal · Space Pause**;
+drag to orbit, scroll to zoom, click organisms for traits, **←/→** step recorded
+history (Shift ×10), **T** trails. Buttons also select views, pause, change speed,
+restart and scrub the timeline. The recording loops in about 48 seconds at 1×;
+cosmetic animation/interpolation continues while the recorded timeline is paused.
+
+This is a recorded simulation, **not** an in-browser physics/circuit engine:
+no new evolution, physics checkpoint branching, parameter editing or backend
+simulation occurs while playing. It showcases one planet and a bounded subset
+of its individuals; it does not include the universe/event viewers or all optional
+external solvers. WebGL and a modern browser with `structuredClone` are required;
+photoreal mode is procedural shading, not a rendered movie. The loop resets its
+recorded time rather than pretending to evolve continuously.
+
+For a reproducible headless iframe smoke test (optional Playwright + Chromium):
+
+```bash
+python -m pip install playwright
+python -m playwright install chromium
+PYTHONPATH=.:/workspace/NIM python -m universe.verify_itch_html \
+  --demo /workspace/itch/html_demo --shots /workspace/itch/demo_shots
+node universe/viewer_src/test_life_replay.cjs
+PYTHONPATH=.:/workspace/NIM python -m pytest -q universe/test_export_itch_html.py
+```
+
+The verifier starts its own `python -m http.server` on a free loopback port,
+tests a strict sandboxed iframe, pause/scrub/loop/resize, captures orbit, surface,
+creature and photoreal screenshots, logs console errors and requests to
+`demo_shots/verification.json`, and stops the server even on failure.
+Generated HTML, recordings, screenshots and zip files belong outside the repo.

@@ -1,0 +1,22 @@
+// Run with node universe/viewer_src/test_life_replay.cjs
+const assert=require('node:assert/strict');
+require('./life_replay.js');
+const source=[{seq:1,t_w:20},{seq:2,t_w:40},{seq:3,t_w:60}];
+const r=new globalThis.NIMReplay({info:{seed:4},ticks:source,interval:0.2});
+let last; r.start(t=>last=t);
+assert.equal(last.seq,1);
+r.advance(0.21); assert.equal(last.seq,2);
+r.control({action:'pause'}); r.advance(1); assert.equal(last.seq,2); assert(last.paused);
+r.control({action:'seek',seq:3}); assert.equal(last.seq,3); assert(last.paused);
+r.control({action:'resume'}); r.advance(.21); assert.equal(last.seq,1);
+r.control({action:'forward',steps:999}); assert.equal(last.seq,3);
+r.control({action:'rewind',steps:999}); assert.equal(last.seq,1);
+r.control({action:'set_speed',speed:4}); r.control({action:'resume'}); r.advance(.051); assert.equal(last.seq,2);
+r.control({action:'set_speed',speed:0}); r.advance(.026); assert.equal(last.seq,3);
+r.control({action:'seek',seq:NaN}); assert(Number.isFinite(last.seq));
+assert.deepEqual(source,[{seq:1,t_w:20},{seq:2,t_w:40},{seq:3,t_w:60}]);
+assert.throws(()=>new globalThis.NIMReplay({ticks:[]}),/two/);
+const immutable=new globalThis.NIMReplay({ticks:[{seq:1,creatures:[{age:1}]},{seq:2,creatures:[{age:2}]}]});
+immutable.start(t=>t.creatures[0].age=999);
+assert.equal(immutable.ticks[0].creatures[0].age,1);
+console.log('Replay: start, pause, seek, resume, loop, clamp, speed, malformed seek, immutable input PASS');

@@ -2,11 +2,12 @@
 (async function(){
 const V3=THREE.Vector3, W=()=>innerWidth, H=()=>innerHeight, f=(x,n=2)=>Number(x).toFixed(n);
 // auth: token from ?token= in the page URL (or a prompt on 401, remembered in sessionStorage); sent as Bearer on fetch, ?token= on EventSource
-let TOKEN=new URLSearchParams(location.search).get('token')||sessionStorage.getItem('nim_token')||'';
+const replay=window.NIM_DEMO?new NIMReplay(window.NIM_DEMO):null;
+let TOKEN=replay?'':new URLSearchParams(location.search).get('token')||sessionStorage.getItem('nim_token')||'';
 const AH=()=>TOKEN?{Authorization:'Bearer '+TOKEN}:{}; const TQ=u=>TOKEN?u+(u.includes('?')?'&':'?')+'token='+encodeURIComponent(TOKEN):u;
 async function afetch(u,o={}){for(let i=0;i<3;i++){const r=await fetch(u,Object.assign({},o,{headers:Object.assign({},o.headers||{},AH())})); if(r.status!==401) return r;
  TOKEN=prompt('NIM live: access token')||''; sessionStorage.setItem('nim_token',TOKEN);} throw new Error('unauthorized');}
-const info=await (await afetch('info')).json();
+const info=replay?replay.info:await (await afetch('info')).json();
 const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,2)); renderer.setSize(W(),H()); document.body.appendChild(renderer.domElement);
 const camera=new THREE.PerspectiveCamera(50,W()/H(),.0005,5000); const controls=new THREE.OrbitControls(camera,renderer.domElement); controls.enableDamping=true; controls.dampingFactor=.12;
 addEventListener('resize',()=>{camera.aspect=W()/H(); camera.updateProjectionMatrix(); renderer.setSize(W(),H());});
@@ -71,14 +72,14 @@ function planetsHud(raw){if(!raw.planets){plE.style.display='none'; return;} plE
  plE.innerHTML='<b>planets</b> <span style="color:#789">[ ] switch</span><br>'+raw.planets.map(q=>`<div class="pl${q.planet===focus?' on':''}" data-p="${q.planet}">${q.planet===focus?'▶ ':''}${q.planet} · ${q.ptype} · ${q.alive?q.n_alive+' alive':'lifeless'} · tech ${f(q.tech,2)} · ${f(q.climate.T_K,0)} K</div>`).join('');
  plE.querySelectorAll('.pl').forEach(e=>e.onclick=()=>setFocus(e.dataset.p));}
 function ctlHud(raw){const rep=raw.mode==='replay', lo=raw.hist_from||0, hi=raw.hist_to||0;
- document.getElementById('badge').textContent=rep?`REPLAY #${raw.seq} / ${raw.live_seq}`:(raw.paused?'LIVE · PAUSED':'LIVE'); document.getElementById('badge').className=rep?'rep':(raw.paused?'pau':'live');
+ document.getElementById('badge').textContent=replay?`${raw.paused?'PAUSED':'REPLAY'} #${raw.seq} / ${hi}`:rep?`REPLAY #${raw.seq} / ${raw.live_seq}`:(raw.paused?'LIVE · PAUSED':'LIVE'); document.getElementById('badge').className=rep?'rep':(raw.paused?'pau':'live');
  document.getElementById('bp').textContent=raw.paused?'▶ Resume':'❚❚ Pause'; const sl=document.getElementById('scrub'); sl.min=lo; sl.max=hi; if(!scrubbing) sl.value=raw.seq||hi;
  document.getElementById('spd').textContent=raw.realtime_s>0?`${f(raw.realtime_s,3)} s/tick`:'max speed';}
 function render(){if(!lastRaw) return; const tk=pick(lastRaw); last=tk; sync(tk.creatures||[]); const first=crs.values().next().value; techLights(tk.tech,first&&first.p); hud(tk); planetsHud(lastRaw); if(sel!=null) showSel(sel);}
 function onTick(raw){st=raw; nTicks++; ctlHud(raw); if(frozen) return; const jump=lastRaw&&raw.seq!==lastRaw.seq+1; if(jump) clearTrails(); lastRaw=raw; render();}
 function setFocus(name){if(name===focus) return; focus=name; clearCreatures(); techLights(0,null); buildPlanet((planets.find(q=>q.planet===name)||planets[0]).look); render();}
 function cyclePlanet(d){const i=planets.findIndex(q=>q.planet===focus); setFocus(planets[(i+d+planets.length)%planets.length].planet);}
-async function control(body){try{const r=await afetch('control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json(); Object.assign(st,j); return j;}catch(e){console.error(e);}}
+async function control(body){if(replay) return replay.control(body); try{const r=await afetch('control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json(); Object.assign(st,j); return j;}catch(e){console.error(e);}}
 let scrubbing=false;
 ctlE.innerHTML=`<span id="badge" class="live">LIVE</span> <button id="bp">❚❚ Pause</button> <button data-s="0.25">0.25×</button><button data-s="1">1×</button><button data-s="4">4×</button><button data-s="0">max</button> <span id="spd"></span><br>
  <button id="rw">◀ step</button><input id="scrub" type="range" min="0" max="0" value="0" style="width:180px;vertical-align:middle"><button id="fw">step ▶</button> <button id="lv">⏭ Return to live</button> <button id="rp" title="restore physics checkpoint at this seq and branch (R / Alt+scrub)">⟲ Restore physics here</button> <label><input id="tr" type="checkbox" checked> trails</label>`;
@@ -89,24 +90,43 @@ document.getElementById('lv').onclick=()=>control({action:'live'});
 let altDown=false; addEventListener('keydown',e=>{if(e.key==='Alt')altDown=true;}); addEventListener('keyup',e=>{if(e.key==='Alt')altDown=false;}); addEventListener('blur',()=>altDown=false);
 const restoreHere=()=>{const q=st.replay_seq!=null?st.replay_seq:(st.mode==='replay'&&lastRaw?lastRaw.seq:null); if(q!=null) control({action:'restore',seq:q});};
 document.getElementById('rp').onclick=restoreHere;
+if(replay){document.getElementById('rp').style.display='none'; document.getElementById('lv').textContent='↻ Restart'; ctlE.querySelector('[data-s=\"0\"]').textContent='8×';}
 document.getElementById('tr').onchange=e=>{showTrails=e.target.checked; if(!showTrails) clearTrails();};
 {const sl=document.getElementById('scrub'); sl.oninput=e=>{scrubbing=true; control({action:'seek',seq:+sl.value,physics:altDown});}; sl.onchange=()=>{scrubbing=false;};}
 function connect(){const es=new EventSource(TQ('stream')); es.onopen=()=>{connE.textContent='● live'; connE.style.color='#8f8';};
  es.onmessage=e=>{try{onTick(JSON.parse(e.data));}catch(err){console.error(err);}};
  es.addEventListener('end',()=>{connE.textContent='■ sim ended (max-years) · history still browsable'; connE.style.color='#fb6';});
  es.onerror=()=>{connE.textContent='○ reconnecting…'; connE.style.color='#f88';};}
-connect(); setInterval(()=>{if(last&&connE.textContent.startsWith('●')) connE.textContent=`● connected · year ${Math.round(last.t_w)} · ${nTicks} msgs${frozen?' · view frozen':''}`;},500);
-modeE.textContent='Life surface · LIVE'+(planets.length>1?` · ${planets.length} planets`:'');
+if(replay){replay.start(onTick); connE.textContent='Offline · recorded simulation · loops'; connE.style.color='#8fc';}
+else connect(); setInterval(()=>{if(last&&connE.textContent.startsWith('●')) connE.textContent=`● connected · year ${Math.round(last.t_w)} · ${nTicks} msgs${frozen?' · view frozen':''}`;},500);
+modeE.textContent=(replay?'NIMverse · Browser demo':'Life surface · LIVE')+(planets.length>1?` · ${planets.length} planets`:'');
 function showSel(id){sel=id; const cr=crs.get(id); if(!cr){selE.style.display='none'; sel=null; return;} const c=cr.c; selE.style.display='block';
  selE.innerHTML=`<b>individual #${c.id}</b> · species ${c.species_id} · gen ${c.generation}<br>parent ${c.parent_id??'founder'}${c.parent2_id!=null?` × ${c.parent2_id}`:''} · age ${f(c.age,0)} yr · energy ${f(c.energy)}<br>plan <b>${c.plan}</b> · size ${f(c.size)}<hr style="border-color:#234">`+Object.entries(c.traits).map(([a,b])=>`${a} <b>${f(b,3)}</b>`).join('<br>');}
 const ray=new THREE.Raycaster(), mv=new THREE.Vector2();
 renderer.domElement.addEventListener('click',e=>{mv.set(e.clientX/W()*2-1,-e.clientY/H()*2+1); ray.setFromCamera(mv,camera); const ps=[]; for(const cr of crs.values()) cr.g.traverse(o=>{if(o.isMesh&&!o.userData.noPick)ps.push(o);}); const h=ray.intersectObjects(ps,false); if(h.length) showSel(h[0].object.userData.id); else showSel(null);});
-addEventListener('keydown',e=>{if(e.key==='1'){sel=null; showSel(null); camera.position.set(0,.8,3); controls.target.set(0,0,0);} if(e.key==='3'){const ids=[...crs.keys()]; if(ids.length) showSel(ids[(ids.indexOf(sel)+1)%ids.length]);} if(e.key===' '){e.preventDefault(); if(e.shiftKey) frozen=!frozen; else control({action:'toggle'});}
+function view(mode){
+ if(mode==='orbit'){showSel(null); camera.up.set(0,1,0); controls.minDistance=1.02; camera.position.set(0,.8,3); controls.target.set(0,0,0); return;}
+ const ids=[...crs.keys()].filter(id=>!crs.get(id).dying); if(!ids.length) return;
+ // Prefer the sunlit hemisphere so the first close-up is readable.
+ const bright=ids.filter(id=>crs.get(id).p.dot(sun)>0); const pool=bright.length?bright:ids;
+ const id=mode==='creature'?pool[(pool.indexOf(sel)+1)%pool.length]:pool[0], cr=crs.get(id);
+ const up=cr.p.clone().normalize(), tangent=new V3(0,1,0).cross(up).normalize();
+ const p=up.clone().multiplyScalar(ALT[cr.c.plan]||1.005);
+ camera.up.copy(up); controls.minDistance=.002; controls.target.copy(p);
+ camera.position.copy(p).addScaledVector(up,mode==='surface'?.065:.012).addScaledVector(tangent,mode==='surface'?.12:.03);
+ showSel(mode==='creature'?id:null);
+}
+const views=document.createElement('div'); views.id='views';
+views.innerHTML='<button data-view="orbit">1 Orbit</button><button data-view="surface">2 Surface</button><button data-view="creature">3 Creature</button>';
+views.querySelectorAll('button').forEach(b=>b.onclick=()=>view(b.dataset.view)); document.body.appendChild(views);
+if(replay) document.getElementById('help').textContent='Drag orbit · scroll zoom · 1/2/3 views · P photoreal · Space pause · ←/→ step · scrub timeline · T trails';
+addEventListener('keydown',e=>{if(e.target.matches('input,select,textarea')) return; if(['ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault(); if(e.key==='1') view('orbit'); if(e.key==='2') view('surface'); if(e.key==='3') view('creature'); if(e.key===' '){e.preventDefault(); if(e.shiftKey) frozen=!frozen; else control({action:'toggle'});}
  if(e.key==='ArrowLeft') control({action:'rewind',steps:e.shiftKey?10:1}); if(e.key==='ArrowRight') control({action:'forward',steps:e.shiftKey?10:1});
  if(e.key==='l'||e.key==='L') control({action:'live'}); if(e.key==='r'||e.key==='R') restoreHere(); if(e.key==='[') cyclePlanet(-1); if(e.key===']') cyclePlanet(1);
  if(e.key==='t'||e.key==='T'){showTrails=!showTrails; document.getElementById('tr').checked=showTrails; if(!showTrails) clearTrails();}});
 camera.position.set(0,.8,3); controls.minDistance=1.02;
-function animate(now){requestAnimationFrame(animate); const t=(now-t0)/1000;
+let replayTime=performance.now();
+function animate(now){requestAnimationFrame(animate); if(replay){replay.advance((now-replayTime)/1000); replayTime=now;} const t=(now-t0)/1000;
  for(const [id,cr] of crs){const c=cr.c, k=Math.min(1,.04); cr.p.lerp(cr.target,k).normalize(); const p=cr.p, ph=t*c.speed*6+c.phase;
   let fw=cr.fw.clone(); fw.sub(p.clone().multiplyScalar(fw.dot(p))); if(fw.lengthSq()<1e-10) fw=new V3(0,1,0).cross(p); fw.normalize();
   let h=ALT[c.plan]||1.005; if(c.plan==='flyer') h+=.01*Math.sin(t*.7+c.phase); if(c.plan==='floater') h+=.004*Math.sin(t*1.3+c.phase);
@@ -120,5 +140,5 @@ function setLook(l){NIMC.setLook(l); NIMC.applyLookLights(renderer); for(const c
   const B=NIMC.build(cr.c); cr.body=B.body; cr.limbs=B.limbs; cr.shadow=B.shadow; cr.g.add(B.body); cr.g.add(B.shadow); B.body.traverse(o=>{if(o.isMesh) o.userData.id=cr.c.id;});} lookBtn.refresh(); return NIMC.getLook();}
 NIMC.applyLookLights(renderer); const lookBtn=NIMC.lookUI(()=>setLook(NIMC.getLook()));
 requestAnimationFrame(animate);
-window.NIM={ready:true, setLook, look:()=>NIMC.getLook(), last:()=>last, raw:()=>lastRaw, focus:()=>focus, setFocus, control, ticks:()=>nTicks, n:()=>crs.size, cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t);}, select:showSel};
+window.NIM={ready:true, view, setLook, look:()=>NIMC.getLook(), last:()=>last, raw:()=>lastRaw, focus:()=>focus, setFocus, control, ticks:()=>nTicks, n:()=>crs.size, cam:(p,t)=>{camera.position.set(...p); controls.target.set(...t);}, select:showSel};
 })();

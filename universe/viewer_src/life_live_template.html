@@ -9,6 +9,16 @@ html,body{margin:0;height:100%;overflow:hidden;background:#000;font:13px system-
 #badge{font-weight:700;padding:1px 6px;border-radius:4px}.live{background:#163;color:#8f8}.pau{background:#541;color:#fc8}.rep{background:#615;color:#fbe}
 #planets{position:absolute;right:10px;bottom:40px;max-width:340px;background:rgba(10,14,24,.72);border:1px solid #234;border-radius:8px;padding:8px;line-height:1.5;display:none}.pl{cursor:pointer}.pl.on{color:#8fc}
 #help{position:absolute;left:12px;bottom:10px;color:#789;font-size:11px} b{color:#8fc}
+
+body>canvas{display:block;touch-action:none}
+#sel{top:44px;max-height:60vh;overflow:auto}
+#views{position:absolute;left:50%;transform:translateX(-50%);top:10px;display:flex;gap:5px;z-index:2}
+#views button{background:#102231e8;color:#bfe9dd;border:1px solid #456;border-radius:6px;padding:7px 10px;cursor:pointer}
+#ctl{width:min(780px,calc(100% - 32px));box-sizing:border-box;bottom:42px}
+#help{bottom:25px;max-width:calc(100% - 24px)}
+#credit{position:absolute;bottom:7px;left:12px;color:#9ab;font-size:11px;pointer-events:none}
+#conn{bottom:7px}
+@media(max-width:760px){#info{font-size:10px;max-width:180px;top:70px}#mode{font-size:12px}#views{top:32px;white-space:nowrap}#sel{font-size:10px;max-width:150px;top:70px;max-height:42vh;overflow:auto}#ctl{font-size:11px;line-height:1.6;bottom:65px}#help{bottom:32px;font-size:10px}#credit{max-width:70%;font-size:9px}#conn{font-size:9px;max-width:30%;text-align:right}#scrub{max-width:27vw}}
 </style></head><body><div id="mode"></div><div id="conn">connecting…</div><div id="info"></div><div id="sel"></div><div id="ctl"></div><div id="planets"></div>
 <div id="help">drag: orbit · scroll: zoom · click a creature: traits · keys 1 orbit · 3 next creature · space pause/resume sim · shift+space freeze view · ←/→ history (shift ×10) · L live · [ ] planet · T trails</div>
 <script>/*THREE*/</script><script>/*ORBIT*/</script><script>/*SHADERS*/</script><script>/*APP*/</script></body></html>
