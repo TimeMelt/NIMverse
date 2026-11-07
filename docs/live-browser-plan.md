@@ -10,3 +10,7 @@ Backup: /workspace/backups/nim-universe-pre-live-20261107-165811.tar.gz.
 5. Automated circuit/native-worker parity, determinism and physics sanity; iframe, request audit, screenshots; offline archive under 100 MB / 1000 files.
 
 Simplifications are explicit: finite sample of galaxies/stars, independent display/stellar/planet clocks, local detail only, approximate galaxy/event recipes (not numerical relativity). Browser never trains NIM and never represents a quantum computer. Exact numerical leaf code is distinguished from parameter-driven classical physics. No product/public wording claims quantum hardware.
+
+Stage 1 passed: Pyodide uses module workers (classic workers are unsupported in 314.0.7). REBOUND 4.4.7 integrates a two-body orbit in WASM. A WASM32 NumPy repeat index-width portability fix was required. Adapter clears the existing equilibrium cache because its warm path integrates an extra year and otherwise makes revisits order-dependent. Runtime is ~23.5 MB zipped. No external browser requests.
+
+Stage 2: seeded per-body streams, three finite galaxies, 768 star tracers + 3 halos + 3 SMBHs. JS procedural port follows sim2 morphology/IMF recipes, but is not bit-identical to NumPy generation. Streaming Barnes-Hut with leapfrog; independent accelerated event clock. Mass loss recorded as unresolved ejecta/radiation, event ring limited to 64. WD/SN/NS/BH/GRB and radius-gated capture/TDE, phenomenological AGN, SMBH mergers included. Events are simplified classical prescriptions, not external solver parity.

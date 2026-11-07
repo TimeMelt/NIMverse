@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {RNG,Universe,gravity,stepGravity,energy} from './universe.js';
+test('stable per-ID independent random streams',()=>{const a=new RNG(123,'star/1'),b=new RNG(123,'star/1');for(let k=0;k<20;k++)assert.equal(a.random(),b.random());assert.notEqual(new RNG(123,'star/2').random(),b.random());});
+test('generation repeatable across seeds and order',()=>{for(const seed of [0,4,22,4294967295]){let a=new Universe(seed),b=new Universe(seed);assert.deepEqual(a.bodies,b.bodies);assert.ok(a.bodies.length>500);assert.ok(a.bodies.every(x=>x.p.every(Number.isFinite)));}});
+test('leapfrog two-body energy and mass',()=>{let a=[{p:[-1,0,0],v:[0,-.5,0],m:1,soft:0},{p:[1,0,0],v:[0,.5,0],m:1,soft:0}];let E=energy(a);for(let i=0;i<1000;i++)stepGravity(a,.005,0);assert.ok(Math.abs((energy(a)-E)/E)<1e-5);assert.equal(a.reduce((s,b)=>s+b.m,0),2);});
+test('Barnes-Hut agrees with direct on a small system',()=>{let a=new Universe(4).bodies.slice(0,40);let exact=gravity(a,0),tree=gravity(a,.35);let err=0,ref=0;for(let i=0;i<a.length;i++)for(let k=0;k<3;k++){err+=(tree[i][k]-exact[i][k])**2;ref+=exact[i][k]**2;}assert.ok(Math.sqrt(err/ref)<.06);});
+test('events are bounded and mass ledger closes',()=>{let u=new Universe(4);for(let i=0;i<20;i++)u.step(.005,20);assert.ok(u.events.length<=64);let m=u.bodies.reduce((s,b)=>s+b.m,0)+u.ejected+u.radiated;assert.ok(Math.abs(m-u.mass0)<1e-7);assert.ok(u.events.length>0);});

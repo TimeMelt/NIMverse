@@ -1,0 +1,39 @@
+{
+  "label": "NIM offline-trained preset \u00b7 learned_params_v3 / learned_events_v4",
+  "params": {
+    "spread_mult": 0.9976607897253255,
+    "gal_mass_mult": 0.7433239671914892,
+    "gal_radius_mult": 1.2611962775952719,
+    "vel_disp": 0.31663333579383096,
+    "disk_frac": 0.21326723979694343,
+    "thickness": 0.04167759103081602,
+    "arms_mean": 3.173375393781304,
+    "spiral_prob": 0.7402426104139906,
+    "imf_slope": 2.3558778350871448,
+    "encounter_prob": 0.31826447012332326,
+    "halo_core": 0.6393711137571024,
+    "planets_mean": 5.125068319160104,
+    "spacing_mult": 0.9976750212340565,
+    "moon_dist_mult": 0.931442384917688,
+    "binary_prob": 0.29195034883624177,
+    "belt_prob": 0.6038346140637949
+  },
+  "events": {
+    "spread_mult": 0.9976607897253255,
+    "gal_mass_mult": 0.7433239671914892,
+    "gal_radius_mult": 1.2611962775952719,
+    "vel_disp": 0.31663333579383096,
+    "disk_frac": 0.21326723979694343,
+    "thickness": 0.04167759103081602,
+    "arms_mean": 3.173375393781304,
+    "spiral_prob": 0.7402426104139906,
+    "imf_slope": 2.3558778350871448,
+    "encounter_prob": 0.31826447012332326,
+    "halo_core": 0.6393711137571024,
+    "planets_mean": 5.125068319160104,
+    "spacing_mult": 0.9976750212340565,
+    "moon_dist_mult": 0.931442384917688,
+    "binary_prob": 0.29195034883624177,
+    "belt_prob": 0.6038346140637949
+  }
+}
